@@ -48,3 +48,4 @@ DREAMSCAPE_STANDALONE/.venv/
 .vscode/
 .idea/
 .cursor-prompts/ 
+# Conversation Data (contains personal ChatGPT conversations)data/conversations/data/conversations/*.jsondata/conversations/*.md!demo_export.json!package.json!requirements.json
