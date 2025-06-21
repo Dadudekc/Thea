@@ -1,0 +1,50 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Test cache
+.pytest_cache/
+
+# Runtime directory (contains instance-specific data, logs, etc.)
+runtime/
+frontend/
+BATTLE_TESTED/
+CLEANBATTLETESTED/
+
+# Backups
+*.bak
+*.backup
+*.backup_*
+src.backup_*/
+tests.backup_*/
+DREAMSCAPE_STANDALONE/data/backups/
+
+# Analysis outputs (optional, depends on workflow)
+# analysis/temp_*
+
+# Generated reports (e.g., from find_todos)
+todo_report_categories/
+*.log
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env*
+
+# Secrets storage (e.g., cookies)
+secrets/
+DREAMSCAPE_STANDALONE/.venv/
+*.DS_Store
+
+# IDE specific folders
+.vscode/
+.idea/
+.cursor-prompts/ 

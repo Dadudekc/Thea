@@ -1,0 +1,28 @@
+# Core Dependencies
+PyQt6>=6.7.0
+PyQt6-sip>=13.6.0
+
+# Web Scraping
+selenium>=4.10.0
+undetected-chromedriver>=3.5.0
+requests>=2.31.0
+beautifulsoup4>=4.12.3
+
+# Template Engine
+Jinja2>=3.1.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.3
+
+# Utilities
+python-dateutil>=2.8.2
+pytz>=2023.3
+loguru>=0.7.0
+python-dotenv>=1.0.0
+
+# Development
+pytest>=8.0.0
+pytest-qt>=4.4.0
+black>=24.0.0
+flake8>=6.1.0 
