@@ -1,0 +1,27 @@
+{
+  "conversations": [
+    {
+      "id": "conv_001",
+      "title": "Python Web Development",
+      "date": "2024-01-15",
+      "model": "GPT-4",
+      "message_count": 12
+    },
+    {
+      "id": "conv_002",
+      "title": "Machine Learning Basics",
+      "date": "2024-01-14",
+      "model": "GPT-3.5",
+      "message_count": 8
+    },
+    {
+      "id": "conv_003",
+      "title": "Data Analysis with Pandas",
+      "date": "2024-01-13",
+      "model": "GPT-4",
+      "message_count": 15
+    }
+  ],
+  "export_date": "2024-01-15",
+  "total_messages": 35
+}
