@@ -84,11 +84,11 @@ def test_real_chatgpt_login():
             # Test 2: Check login status
             print_info("Test 2: Checking login status...")
             if not scraper.is_logged_in():
-                print_info("Not logged in, attempting login...")
+                print_info("Not logged in, attempting modern login...")
                 
-                # Test 3: Perform login
-                print_info("Test 3: Performing login...")
-                if not scraper.login_with_credentials():
+                # Test 3: Perform modern login with manual fallback
+                print_info("Test 3: Performing modern login...")
+                if not scraper.ensure_login_modern(allow_manual=True, manual_timeout=120):
                     print_warning("Login failed")
                     return False
                 print_success("Login successful!")

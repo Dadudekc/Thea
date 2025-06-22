@@ -715,58 +715,112 @@ class ChatGPTScraper:
             
             # Navigate to login page
             self.driver.get("https://chat.openai.com/auth/login")
-            time.sleep(3)
+            time.sleep(5)  # Give more time for page to load
             
-            # Find and fill username/email field
-            try:
-                email_field = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input[name='username']"))
-                )
-                email_field.clear()
-                email_field.send_keys(self.username)
-                logger.info("Entered username/email")
-            except TimeoutException:
-                logger.error("Could not find email field")
-                return False
+            # Debug: Log current page title and URL
+            logger.info(f"Current page: {self.driver.title}")
+            logger.info(f"Current URL: {self.driver.current_url}")
             
-            # Find and click continue button
-            try:
-                continue_button = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit'], button:contains('Continue')"))
-                )
-                continue_button.click()
-                logger.info("Clicked continue button")
-                time.sleep(3)
-            except TimeoutException:
-                logger.error("Could not find continue button")
-                return False
+            # Try to find and click login button
+            login_button = None
             
-            # Find and fill password field
-            try:
-                password_field = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='password']"))
-                )
-                password_field.clear()
-                password_field.send_keys(self.password)
-                logger.info("Entered password")
-            except TimeoutException:
-                logger.error("Could not find password field")
-                return False
+            # Try various selectors for login button, prioritizing the specific one found
+            login_selectors = [
+                "[data-testid='login-button']",  # Primary target based on user's finding
+                "button.btn-blue.btn-large",     # CSS classes from the button
+                "button:contains('Log in')",
+                "button:contains('Sign in')",
+                "a:contains('Log in')",
+                "a:contains('Sign in')",
+                ".login-button"
+            ]
             
-            # Find and click login button
-            try:
-                login_button = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit'], button:contains('Continue')"))
-                )
+            for selector in login_selectors:
+                try:
+                    login_button = self.driver.find_element("css selector", selector)
+                    if login_button.is_displayed():
+                        logger.info(f"Found login button with selector: {selector}")
+                        # Check if button is enabled (not disabled)
+                        if not login_button.get_attribute("disabled"):
+                            logger.info("Login button is enabled and clickable")
+                            break
+                        else:
+                            logger.info("Login button is disabled, waiting for it to become enabled...")
+                            # Wait for button to become enabled
+                            try:
+                                from selenium.webdriver.support.ui import WebDriverWait
+                                from selenium.webdriver.support import expected_conditions as EC
+                                from selenium.webdriver.common.by import By
+                                
+                                # Wait for button to become enabled (not disabled)
+                                WebDriverWait(self.driver, 30).until(
+                                    lambda driver: not driver.find_element("css selector", selector).get_attribute("disabled")
+                                )
+                                logger.info("Login button is now enabled!")
+                                break
+                            except:
+                                logger.warning("Login button remained disabled, trying next selector")
+                                continue
+                except:
+                    continue
+            
+            if not login_button:
+                # Try XPath selectors
+                xpath_selectors = [
+                    "//button[@data-testid='login-button']",  # Primary XPath target
+                    "//button[contains(@class, 'btn-blue') and contains(@class, 'btn-large')]",
+                    "//button[contains(text(), 'Log in')]",
+                    "//button[contains(text(), 'Sign in')]",
+                    "//a[contains(text(), 'Log in')]",
+                    "//a[contains(text(), 'Sign in')]"
+                ]
+                
+                for xpath in xpath_selectors:
+                    try:
+                        login_button = self.driver.find_element("xpath", xpath)
+                        if login_button.is_displayed():
+                            logger.info(f"Found login button with XPath: {xpath}")
+                            # Check if button is enabled
+                            if not login_button.get_attribute("disabled"):
+                                logger.info("Login button is enabled and clickable")
+                                break
+                            else:
+                                logger.info("Login button is disabled, waiting for it to become enabled...")
+                                # Wait for button to become enabled
+                                try:
+                                    WebDriverWait(self.driver, 30).until(
+                                        lambda driver: not driver.find_element("xpath", xpath).get_attribute("disabled")
+                                    )
+                                    logger.info("Login button is now enabled!")
+                                    break
+                                except:
+                                    logger.warning("Login button remained disabled, trying next selector")
+                                    continue
+                    except:
+                        continue
+            
+            if login_button:
+                logger.info("Clicking login button to open login page...")
                 login_button.click()
-                logger.info("Clicked login button")
-                
-                # Wait for login to complete
-                time.sleep(5)
-                
+                time.sleep(3)
+            else:
+                logger.info("No login button found, navigating directly to login page...")
+                self.driver.get("https://chat.openai.com/auth/login")
+                time.sleep(3)
+            
+            # Show user instructions
+            logger.info("🌐 Browser window opened for manual login")
+            logger.info("📝 Please log in manually in the browser window")
+            logger.info(f"⏳ Waiting up to {self.timeout} seconds for login completion...")
+            
+            # Wait for manual login with periodic checks
+            start_time = time.time()
+            check_interval = 5  # Check every 5 seconds
+            
+            while time.time() - start_time < self.timeout:
                 # Check if login was successful
                 if self.is_logged_in():
-                    logger.info("✅ Automated login successful!")
+                    logger.info("✅ Manual login successful!")
                     
                     # Save cookies for future use
                     if self.cookie_file:
@@ -774,24 +828,182 @@ class ChatGPTScraper:
                         logger.info(f"💾 Cookies saved to {self.cookie_file}")
                     
                     return True
-                else:
-                    logger.warning("Login may have failed - not logged in after attempt")
-                    return False
-                    
-            except TimeoutException:
-                logger.error("Could not find login button")
-                return False
                 
+                # Wait before next check
+                time.sleep(check_interval)
+                
+                # Show progress
+                elapsed = int(time.time() - start_time)
+                remaining = self.timeout - elapsed
+                logger.info(f"⏳ Still waiting... ({elapsed}s elapsed, {remaining}s remaining)")
+            
+            # Timeout reached
+            logger.warning(f"⏰ Manual login timeout after {self.timeout} seconds")
+            logger.info("Please try again or check your credentials")
+            return False
+            
         except Exception as e:
             logger.error(f"Automated login failed: {e}")
             return False
     
-    def ensure_login(self, allow_manual: bool = True) -> bool:
+    def login_with_manual_fallback(self, timeout: int = 120) -> bool:
         """
-        Ensure user is logged in, trying automated login first, then manual if needed.
+        Login with manual fallback - opens browser for user to log in manually.
+        
+        Args:
+            timeout: Maximum time to wait for manual login (seconds)
+            
+        Returns:
+            True if login successful, False otherwise
+        """
+        if not self.driver:
+            logger.error("Driver not initialized")
+            return False
+        
+        try:
+            logger.info("🔧 Automated login not available - using manual fallback")
+            
+            # Navigate to ChatGPT main page
+            self.driver.get("https://chat.openai.com")
+            time.sleep(3)
+            
+            # Check if already logged in
+            if self.is_logged_in():
+                logger.info("✅ Already logged in!")
+                return True
+            
+            # Try to find and click login button
+            login_button = None
+            
+            # Try various selectors for login button, prioritizing the specific one found
+            login_selectors = [
+                "[data-testid='login-button']",  # Primary target based on user's finding
+                "button.btn-blue.btn-large",     # CSS classes from the button
+                "button:contains('Log in')",
+                "button:contains('Sign in')",
+                "a:contains('Log in')",
+                "a:contains('Sign in')",
+                ".login-button"
+            ]
+            
+            for selector in login_selectors:
+                try:
+                    login_button = self.driver.find_element("css selector", selector)
+                    if login_button.is_displayed():
+                        logger.info(f"Found login button with selector: {selector}")
+                        # Check if button is enabled (not disabled)
+                        if not login_button.get_attribute("disabled"):
+                            logger.info("Login button is enabled and clickable")
+                            break
+                        else:
+                            logger.info("Login button is disabled, waiting for it to become enabled...")
+                            # Wait for button to become enabled
+                            try:
+                                from selenium.webdriver.support.ui import WebDriverWait
+                                from selenium.webdriver.support import expected_conditions as EC
+                                from selenium.webdriver.common.by import By
+                                
+                                # Wait for button to become enabled (not disabled)
+                                WebDriverWait(self.driver, 30).until(
+                                    lambda driver: not driver.find_element("css selector", selector).get_attribute("disabled")
+                                )
+                                logger.info("Login button is now enabled!")
+                                break
+                            except:
+                                logger.warning("Login button remained disabled, trying next selector")
+                                continue
+                except:
+                    continue
+            
+            if not login_button:
+                # Try XPath selectors
+                xpath_selectors = [
+                    "//button[@data-testid='login-button']",  # Primary XPath target
+                    "//button[contains(@class, 'btn-blue') and contains(@class, 'btn-large')]",
+                    "//button[contains(text(), 'Log in')]",
+                    "//button[contains(text(), 'Sign in')]",
+                    "//a[contains(text(), 'Log in')]",
+                    "//a[contains(text(), 'Sign in')]"
+                ]
+                
+                for xpath in xpath_selectors:
+                    try:
+                        login_button = self.driver.find_element("xpath", xpath)
+                        if login_button.is_displayed():
+                            logger.info(f"Found login button with XPath: {xpath}")
+                            # Check if button is enabled
+                            if not login_button.get_attribute("disabled"):
+                                logger.info("Login button is enabled and clickable")
+                                break
+                            else:
+                                logger.info("Login button is disabled, waiting for it to become enabled...")
+                                # Wait for button to become enabled
+                                try:
+                                    WebDriverWait(self.driver, 30).until(
+                                        lambda driver: not driver.find_element("xpath", xpath).get_attribute("disabled")
+                                    )
+                                    logger.info("Login button is now enabled!")
+                                    break
+                                except:
+                                    logger.warning("Login button remained disabled, trying next selector")
+                                    continue
+                    except:
+                        continue
+            
+            if login_button:
+                logger.info("Clicking login button to open login page...")
+                login_button.click()
+                time.sleep(3)
+            else:
+                logger.info("No login button found, navigating directly to login page...")
+                self.driver.get("https://chat.openai.com/auth/login")
+                time.sleep(3)
+            
+            # Show user instructions
+            logger.info("🌐 Browser window opened for manual login")
+            logger.info("📝 Please log in manually in the browser window")
+            logger.info(f"⏳ Waiting up to {timeout} seconds for login completion...")
+            
+            # Wait for manual login with periodic checks
+            start_time = time.time()
+            check_interval = 5  # Check every 5 seconds
+            
+            while time.time() - start_time < timeout:
+                # Check if login was successful
+                if self.is_logged_in():
+                    logger.info("✅ Manual login successful!")
+                    
+                    # Save cookies for future use
+                    if self.cookie_file:
+                        self.save_cookies(self.cookie_file)
+                        logger.info(f"💾 Cookies saved to {self.cookie_file}")
+                    
+                    return True
+                
+                # Wait before next check
+                time.sleep(check_interval)
+                
+                # Show progress
+                elapsed = int(time.time() - start_time)
+                remaining = timeout - elapsed
+                logger.info(f"⏳ Still waiting... ({elapsed}s elapsed, {remaining}s remaining)")
+            
+            # Timeout reached
+            logger.warning(f"⏰ Manual login timeout after {timeout} seconds")
+            logger.info("Please try again or check your credentials")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Manual login fallback failed: {e}")
+            return False
+
+    def ensure_login_modern(self, allow_manual: bool = True, manual_timeout: int = 120) -> bool:
+        """
+        Modern login method that tries automated login first, then falls back to manual login.
         
         Args:
             allow_manual: Allow manual login if automated fails
+            manual_timeout: Timeout for manual login (seconds)
             
         Returns:
             True if logged in, False otherwise
@@ -818,28 +1030,16 @@ class ChatGPTScraper:
         
         # Try automated login if credentials are available
         if self.username and self.password:
+            logger.info("Attempting automated login...")
             if self.login_with_credentials():
                 return True
+            else:
+                logger.warning("Automated login failed")
         
         # Fall back to manual login if allowed
         if allow_manual:
-            logger.info("⚠️  Please log in manually in the browser window")
-            logger.info("⏳ Waiting 60 seconds for manual login...")
-            time.sleep(60)
-            
-            # Check if manual login was successful
-            if self.is_logged_in():
-                logger.info("✅ Manual login successful!")
-                
-                # Save cookies for future use
-                if self.cookie_file:
-                    self.save_cookies(self.cookie_file)
-                    logger.info(f"💾 Cookies saved to {self.cookie_file}")
-                
-                return True
-            else:
-                logger.warning("Manual login timeout - still not logged in")
-                return False
+            logger.info("🔄 Falling back to manual login...")
+            return self.login_with_manual_fallback(manual_timeout)
         
         return False
 
