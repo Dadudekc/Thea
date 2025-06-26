@@ -98,10 +98,15 @@ class BrowserManager:
             if self.use_undetected:
                 driver = self._create_undetected_driver()
                 if driver:
+                    self.driver = driver  # ensure close_driver() can quit instance
                     return driver
                 # If undetected failed, fall back automatically
                 logger.warning("Undetected-chromedriver failed – falling back to regular Selenium driver")
-            return self._create_regular_driver()
+            # EDIT START: create regular driver and persist reference
+            driver = self._create_regular_driver()
+            self.driver = driver  # may be None if creation failed
+            return driver
+            # EDIT END
                 
         except Exception as e:
             logger.error(f"Failed to create driver: {e}")
@@ -214,8 +219,26 @@ class BrowserManager:
         
         try:
             if WEBDRIVER_MANAGER_AVAILABLE:
+                # EDIT START: auto-install driver matching local Chrome major version when possible
                 logger.info("Creating regular Chrome driver via webdriver_manager (auto-download)")
-                driver_path = ChromeDriverManager().install()
+                driver_path = None
+                if WEBDRIVER_MANAGER_AVAILABLE:
+                    try:
+                        local_major = self._detect_local_chrome_major()
+                        if local_major:
+                            logger.info("Local Chrome major version detected: %s", local_major)
+                            try:
+                                # webdriver_manager ≥4 supports version_main kwarg
+                                driver_path = ChromeDriverManager(version_main=str(local_major)).install()
+                            except TypeError:
+                                # Fallback for older signature – ignore and install latest
+                                logger.debug("webdriver_manager version_main unsupported – fallback to default installer")
+                        if not driver_path:
+                            driver_path = ChromeDriverManager().install()
+                    except Exception as wm_err:
+                        logger.warning("webdriver_manager failed to resolve matching driver: %s – falling back to default", wm_err)
+                        driver_path = ChromeDriverManager().install()
+                # EDIT END
                 service = ChromeService(executable_path=driver_path)
                 driver = webdriver.Chrome(service=service, options=options)
             else:

@@ -57,3 +57,10 @@ data/conversations/*.md
 !demo_export.json
 !package.json
 !requirements.json
+
+# Build / temp artefacts (added during repo re-org)
+.coverage
+*.db
+*.pkl
+*.png
+*.html

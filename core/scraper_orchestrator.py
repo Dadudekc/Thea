@@ -106,8 +106,13 @@ class ScraperOrchestrator:
             logger.error(f"Failed to initialize browser: {e}")
             return ScrapingResult(success=False, error=str(e))
     
-    def login_and_save_cookies(self, username: Optional[str] = None, 
-                              password: Optional[str] = None) -> ScrapingResult:
+    def login_and_save_cookies(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        allow_manual: bool = False,
+        manual_timeout: int = 30,
+    ) -> ScrapingResult:
         """
         Handle login process and save cookies.
         
@@ -135,7 +140,8 @@ class ScraperOrchestrator:
             ok = self.login_handler.ensure_login_with_cookies(
                 self.driver,
                 self.cookie_manager,
-                allow_manual=False,
+                allow_manual=allow_manual,
+                manual_timeout=manual_timeout,
             )
             if ok:
                 return ScrapingResult(success=True, metadata={"method": "cookies/credentials"})
@@ -146,7 +152,10 @@ class ScraperOrchestrator:
             return ScrapingResult(
                 success=False,
                 error="Manual login required",
-                metadata={"requires_manual_login": True},
+                metadata={
+                    "requires_manual_login": True,
+                    "manual_timeout": manual_timeout,
+                },
             )
         except Exception as e:
             logger.error(f"Login process failed: {e}")

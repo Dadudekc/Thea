@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         help="Destination JSON listing scraped conversation files.",
     )
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (stealth mode)")
-    parser.add_argument("--no_env_login", action="store_true", help="Disable auto-login via environment credentials")
+    parser.add_argument("--env_login", action="store_true", help="Attempt automated credential login only (skip manual)")
     parser.add_argument("--wait_secs", type=int, default=120, help="Max seconds to wait for manual login")
     parser.add_argument(
         "--run_dreamscape", action="store_true", help="After ingesting, run Dreamscape processing pipeline.",
@@ -84,12 +84,18 @@ def main() -> None:
     orch.cookie_manager.cookie_file = args.cookies_file  # renamed attribute
 
     # Optional automated credentials from env
-    username = password = None
-    if not args.no_env_login:
+    if args.env_login:
         username = os.getenv("CHATGPT_USERNAME")
         password = os.getenv("CHATGPT_PASSWORD")
+    else:
+        username = password = None
 
-    login_res = orch.login_and_save_cookies(username=username, password=password)
+    login_res = orch.login_and_save_cookies(
+        username=username,
+        password=password,
+        allow_manual=not args.env_login,
+        manual_timeout=args.wait_secs,
+    )
 
     # Manual fallback polling
     if login_res.metadata and login_res.metadata.get("requires_manual_login"):

@@ -21,9 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scrapers.browser_manager import BrowserManager  # type: ignore
-from scrapers.login_handler import LoginHandler
-from scrapers.cookie_manager import CookieManager
+from core.scraper_orchestrator import ScraperOrchestrator
 
 # Discord
 from core.discord_bridge import DiscordBridge
@@ -55,18 +53,39 @@ def emit_dsupdate(success: bool, duration: float):
         logger.debug(f"[DSUpdate] emit skipped: {e}")
 
 
-def refresh_cookies(headless: bool = True, timeout: int = 60) -> bool:
-    """Perform automated login and persist cookies."""
+def refresh_cookies(
+    headless: bool = False,
+    timeout: int = 60,
+    env_login: bool = False,
+    wait_secs: int = 30,
+) -> bool:
+    """Perform automated login and persist cookies using ScraperOrchestrator."""
+
     start = time.time()
 
-    browser = BrowserManager(headless=headless, use_undetected=True)
-    driver = browser.create_driver()
-
-    cm = CookieManager()
-    lh = LoginHandler(timeout=timeout)
+    orch = ScraperOrchestrator(headless=headless, use_undetected=True)
 
     try:
-        ok = lh.ensure_login_with_cookies(driver, cm, allow_manual=False)
+        # Initialise browser early so we can apply longer timeout to login handler
+        init_res = orch.initialize_browser()
+        if not init_res.success:
+            logger.error("Browser initialisation failed: %s", init_res.error)
+            return False
+
+        # Apply custom timeout to underlying LoginHandler if provided
+        if timeout is not None:
+            try:
+                orch.login_handler.timeout = timeout
+            except AttributeError:
+                pass
+
+        # Orchestrator.login_and_save_cookies reuses the shared LoginHandler path
+        res = orch.login_and_save_cookies(
+            allow_manual=not env_login,
+            manual_timeout=wait_secs,
+        )
+
+        ok = res.success
         duration = time.time() - start
         if ok:
             logger.info("[OK] Login + cookie refresh complete (%.1fs)", duration)
@@ -75,14 +94,30 @@ def refresh_cookies(headless: bool = True, timeout: int = 60) -> bool:
         emit_dsupdate(ok, duration)
         return ok
     finally:
-        browser.close_driver()
+        orch.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Refresh ChatGPT cookies.")
-    parser.add_argument("--no-headless", action="store_true", help="Run browser in headed mode")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (CI-friendly)")
     parser.add_argument("--ci", action="store_true", help="Optimise for CI (shorter timeout, fail fast)")
+    parser.add_argument(
+        "--env_login",
+        action="store_true",
+        help="Attempt automated credential login using environment variables and skip manual fallback",
+    )
+    parser.add_argument(
+        "--wait_secs",
+        type=int,
+        default=30,
+        help="Max seconds to wait for manual login when --env_login is not provided",
+    )
     args = parser.parse_args()
 
-    success = refresh_cookies(headless=not args.no_headless, timeout=30 if args.ci else 60)
+    success = refresh_cookies(
+        headless=args.headless,
+        timeout=30 if args.ci else 60,
+        env_login=args.env_login,
+        wait_secs=args.wait_secs,
+    )
     sys.exit(0 if success else 1) 

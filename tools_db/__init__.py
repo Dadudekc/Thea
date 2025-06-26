@@ -75,9 +75,43 @@ class ToolsDatabaseManager(DatabaseSchemaManager):
 # ---------------------------------------------------------------------------
 
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:  # pragma: no cover
-    """Return a SQLite connection with schema ensured."""
+    """Return a SQLite connection with schema ensured.
+
+    If the `tools` table is currently empty (fresh DB), automatically ingest
+    on-disk tools so parity tests can run without requiring a prior explicit
+    `ingest_tools.run()` call.  This keeps the fast path unchanged for existing
+    installations while making first-time CI runs idempotent.
+    """
     manager = ToolsDatabaseManager()
-    return manager.init_database(str(db_path or DEFAULT_DB_PATH))
+    conn = manager.init_database(str(db_path or DEFAULT_DB_PATH))
+
+    # EDIT START auto-ingest
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM tools LIMIT 1;")
+        if cur.fetchone() is None:  # Empty table ⇒ ingest now
+            from tools_db.ingest_tools import _iter_sources  # local import to avoid cycles
+            import hashlib, logging as _log
+
+            added = 0
+            for name, desc, code, readme in _iter_sources():
+                sig = hashlib.sha256(code.encode("utf-8")).hexdigest()
+                cur.execute(
+                    "INSERT OR IGNORE INTO tools (name, version, signature, description, code, readme) VALUES (?, 1, ?, ?, ?, ?);",
+                    (name, sig, desc, code, readme),
+                )
+                if cur.rowcount:
+                    added += 1
+            conn.commit()
+            if added:
+                _log.getLogger(__name__).info("[ToolsDB] Auto-ingested %s tool(s) on first use", added)
+    except Exception as e:  # pragma: no cover
+        # Failing to auto-ingest should not break consumers; log and proceed.
+        import logging as _log
+        _log.getLogger(__name__).warning("[ToolsDB] Auto-ingest failed: %s", e)
+    # EDIT END auto-ingest
+
+    return conn
 
 
 def list_tools(conn: sqlite3.Connection) -> List[str]:
