@@ -56,6 +56,17 @@ class DatabaseSchemaManager:
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         );
         
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TEXT,
+            message_index INTEGER,
+            word_count INTEGER,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        
         CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp);
         CREATE INDEX IF NOT EXISTS idx_conversations_model ON conversations(model);
         CREATE INDEX IF NOT EXISTS idx_conversations_tags ON conversations(tags);

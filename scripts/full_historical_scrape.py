@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cookies-file", default="data/chatgpt_cookies.pkl")
     p.add_argument("--output-json", default=f"outputs/all_convos_{today}.json")
     p.add_argument("--headless", action="store_true", default=False)
-    p.add_argument("--no-env-login", action="store_true")
+    p.add_argument("--env-login", action="store_true", help="Attempt automated credential login only (skip manual)")
     p.add_argument("--wait-secs", type=int, default=120, help="Manual-login window")
     p.add_argument("--scroll-timeout", type=int, default=2, help="Pause between scrolls (s)")
     p.add_argument("--pause", type=float, default=0.75, help="Courtesy delay between convo fetches (s)")
@@ -151,11 +151,19 @@ def main() -> None:
     orch.cookie_manager.cookie_file = args.cookies_file
 
     # --- login --------------------------------------------------------------
-    username = password = None
-    if not args.no_env_login:
-        username, password = os.getenv("CHATGPT_USERNAME"), os.getenv("CHATGPT_PASSWORD")
+    if args.env_login:
+        username = os.getenv("CHATGPT_USERNAME")
+        password = os.getenv("CHATGPT_PASSWORD")
+    else:
+        username = password = None
+
     try:
-        login_res = orch.login_and_save_cookies(username=username, password=password)
+        login_res = orch.login_and_save_cookies(
+            username=username,
+            password=password,
+            allow_manual=not args.env_login,
+            manual_timeout=args.wait_secs,
+        )
     except Exception:
         logger.exception("Fatal during login")
         save_debug_artifacts(orch.driver)

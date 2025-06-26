@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Optional
 from pathlib import Path
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -87,17 +88,22 @@ class CookieManager:
             with open(cookie_path, 'rb') as f:
                 cookies = pickle.load(f)
             
-            # Remap legacy domains (chatgpt.com -> chat.openai.com) so Selenium
-            # can inject them correctly when we are on https://chat.openai.com.
+            # Dynamically target current host (chat.openai.com or chatgpt.com)
+            current_host = urlparse(driver.current_url).hostname or "chat.openai.com"
             patched = 0
             for cookie in cookies:
-                domain = cookie.get("domain", "")
-                if "chatgpt.com" in domain and "chat.openai.com" not in domain:
-                    cookie["domain"] = domain.replace("chatgpt.com", "chat.openai.com")
+                domain = cookie.get("domain", "") or ""
+                if current_host not in domain:
+                    cookie["domain"] = current_host
                     patched += 1
+                # prune unsupported keys
+                for bad_key in ("sameSite", "sameParty", "priority", "PartitionKey"):
+                    cookie.pop(bad_key, None)
+                if cookie["domain"].startswith("."):
+                    cookie["domain"] = cookie["domain"].lstrip(".")
 
             if patched:
-                logger.debug("Remapped %s cookie domain(s) to chat.openai.com", patched)
+                logger.debug("Rewrote domain for %s cookie(s) → %s", patched, current_host)
 
             # Add cookies to driver
             for cookie in cookies:
