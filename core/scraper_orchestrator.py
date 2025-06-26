@@ -111,48 +111,43 @@ class ScraperOrchestrator:
         """
         Handle login process and save cookies.
         
-        Args:
-            username: ChatGPT username/email
-            password: ChatGPT password
-            
-        Returns:
-            ScrapingResult with login status
+        Reuses LoginHandler.ensure_login_with_cookies for the full cookie →
+        creds → manual tri-flow instead of duplicating logic here.  This keeps
+        a single source-of-truth for login behaviour while preserving the
+        previous public API & return semantics expected by downstream scripts
+        (namely the *requires_manual_login* metadata key).
         """
         if not self.is_initialized:
             result = self.initialize_browser()
             if not result.success:
                 return result
-        
+
+        # Propagate credentials that may have been supplied explicitly – this
+        # allows callers to override env vars without re-instantiating the
+        # orchestrator.
+        if username:
+            self.login_handler.username = username
+        if password:
+            self.login_handler.password = password
+
         try:
-            # Navigate to ChatGPT
-            self.driver.get('https://chat.openai.com/')
-            
-            # Load existing cookies
-            self.cookie_manager.load_cookies(self.driver)
-            
-            # Check if already logged in
-            if self.login_handler.is_logged_in(self.driver):
-                logger.info("Already logged in via cookies")
-                return ScrapingResult(success=True, metadata={"method": "cookies"})
-            
-            # Attempt login
-            if username and password:
-                logger.info("[Login] Attempting automated credential login…")
-                success = self.login_handler.login_with_credentials(self.driver)
-                if success:
-                    self.cookie_manager.save_cookies(self.driver)
-                    return ScrapingResult(success=True, metadata={"method": "credentials"})
-                else:
-                    return ScrapingResult(success=False, error="Login failed with provided credentials")
-            else:
-                # Manual login required
-                logger.info("Manual login required - waiting for user")
-                return ScrapingResult(
-                    success=False, 
-                    error="Manual login required",
-                    metadata={"requires_manual_login": True}
-                )
-                
+            # Phase-1: Attempt cookie+credential login (manual fallback *disabled*)
+            ok = self.login_handler.ensure_login_with_cookies(
+                self.driver,
+                self.cookie_manager,
+                allow_manual=False,
+            )
+            if ok:
+                return ScrapingResult(success=True, metadata={"method": "cookies/credentials"})
+
+            # Phase-2: Signal to caller that manual login is required so they
+            # can decide how/when to wait.  We keep the exact metadata key used
+            # previously so existing scripts remain unchanged.
+            return ScrapingResult(
+                success=False,
+                error="Manual login required",
+                metadata={"requires_manual_login": True},
+            )
         except Exception as e:
             logger.error(f"Login process failed: {e}")
             return ScrapingResult(success=False, error=str(e))
