@@ -1,0 +1,30 @@
+name: Parity & Duplicate Check
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - 'tools_db/**'
+      - 'scripts/check_duplicates.py'
+      - '.github/workflows/parity-check.yml'
+      - 'tests/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install rich pytest typer requests
+      - name: Run duplicate checker
+        run: |
+          python scripts/check_duplicates.py --json > dupes.json
+          if [ -s dupes.json ]; then cat dupes.json && exit 1; fi
+      - name: Run parity tests
+        run: pytest -q tests/test_tools_parity.py 

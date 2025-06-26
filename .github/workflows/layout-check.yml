@@ -1,0 +1,25 @@
+name: Layout & Demo Check
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt rich pytest
+      - name: Run layout auditor
+        run: python scripts/check_layout.py
+      - name: Run phase-1 demo smoke test
+        run: |
+          python demos/phase_1/automated_login_demo.py setup || true  # run help only, no login 

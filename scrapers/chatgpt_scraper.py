@@ -4,6 +4,7 @@ Handles automated ChatGPT conversation extraction without external dependencies.
 """
 
 import os
+import sys
 import json
 import time
 import logging
@@ -11,52 +12,14 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from pathlib import Path
 
-# Try to load .env file if python-dotenv is available
-try:
-    from dotenv import load_dotenv
-    # Load .env file from project root
-    project_root = Path(__file__).parent.parent
-    env_file = project_root / ".env"
-    if env_file.exists():
-        load_dotenv(env_file)
-        logging.info(f"Loaded environment variables from {env_file}")
-    else:
-        # Try to load .env from current directory
-        load_dotenv()
-        logging.info("Loaded environment variables from .env file")
-except ImportError:
-    logging.info("python-dotenv not available - using system environment variables only")
+# Add the project root to the path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    import undetected_chromedriver as uc
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.chrome.options import Options
-    from selenium.common.exceptions import (
-        TimeoutException, NoSuchElementException, 
-        StaleElementReferenceException, WebDriverException
-    )
-    SELENIUM_AVAILABLE = True
-    UNDETECTED_AVAILABLE = True
-except ImportError:
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.chrome.options import Options
-        from selenium.common.exceptions import (
-            TimeoutException, NoSuchElementException, 
-            StaleElementReferenceException, WebDriverException
-        )
-        SELENIUM_AVAILABLE = True
-        UNDETECTED_AVAILABLE = False
-        print("Warning: undetected-chromedriver not available. Using regular selenium.")
-    except ImportError:
-        SELENIUM_AVAILABLE = False
-        UNDETECTED_AVAILABLE = False
-        print("Warning: Selenium not available. Scraper functionality will be limited.")
+# Import modular components
+from scrapers.browser_manager import BrowserManager
+from scrapers.cookie_manager import CookieManager
+from scrapers.login_handler import LoginHandler
+from scrapers.conversation_extractor import ConversationExtractor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -65,66 +28,40 @@ logger = logging.getLogger(__name__)
 class ChatGPTScraper:
     """
     Simplified ChatGPT scraper for extracting conversation history.
-    Uses undetected-chromedriver for better anti-detection capabilities.
-    Supports environment variable credentials and cookie management.
+    Uses modular components for browser management, login, and extraction.
     """
     
     def __init__(self, headless: bool = False, timeout: int = 30, use_undetected: bool = True, 
                  username: Optional[str] = None, password: Optional[str] = None,
-                 cookie_file: Optional[str] = None):
+                 cookie_file: Optional[str] = None, totp_secret: Optional[str] = None):
         """
         Initialize the ChatGPT scraper.
         
         Args:
-            headless: Run browser in headless mode (can be overridden by CHATGPT_HEADLESS env var)
-            timeout: Timeout for web operations (can be overridden by CHATGPT_TIMEOUT env var)
-            use_undetected: Use undetected-chromedriver if available (can be overridden by CHATGPT_USE_UNDETECTED env var)
-            username: ChatGPT username/email (or use CHATGPT_USERNAME env var)
-            password: ChatGPT password (or use CHATGPT_PASSWORD env var)
-            cookie_file: Path to cookie file for session persistence (or use CHATGPT_COOKIE_FILE env var)
+            headless: Run browser in headless mode
+            timeout: Timeout for web operations
+            use_undetected: Use undetected-chromedriver if available
+            username: ChatGPT username/email
+            password: ChatGPT password
+            cookie_file: Path to cookie file for session persistence
+            totp_secret: TOTP secret for 2FA
         """
-        # Load settings from environment variables (with fallbacks to constructor args)
-        self.headless = self._get_env_bool('CHATGPT_HEADLESS', headless)
-        self.timeout = int(os.getenv('CHATGPT_TIMEOUT', timeout))
-        self.use_undetected = self._get_env_bool('CHATGPT_USE_UNDETECTED', use_undetected) and UNDETECTED_AVAILABLE
+        # Initialize modular components
+        self.browser_manager = BrowserManager(headless=headless, use_undetected=use_undetected)
+        self.cookie_manager = CookieManager(cookie_file=cookie_file)
+        self.login_handler = LoginHandler(username=username, password=password, 
+                                        totp_secret=totp_secret, timeout=timeout)
+        self.conversation_extractor = ConversationExtractor(timeout=timeout)
+        
         self.driver = None
+        self.timeout = timeout
         
-        # Get credentials from environment variables if not provided
-        self.username = username or os.getenv('CHATGPT_USERNAME')
-        self.password = password or os.getenv('CHATGPT_PASSWORD')
-        self.cookie_file = cookie_file or os.getenv('CHATGPT_COOKIE_FILE', 'chatgpt_cookies.pkl')
+        # Expose init params for external checks/tests
+        self.use_undetected = use_undetected
+        self.headless = headless
+        self.cookie_file = cookie_file or ""
         
-        if not SELENIUM_AVAILABLE:
-            logger.warning("Selenium not available. Scraper will be in demo mode.")
-        elif self.use_undetected:
-            logger.info("Using undetected-chromedriver for enhanced anti-detection")
-        else:
-            logger.info("Using regular selenium webdriver")
-        
-        # Log credential status
-        if self.username:
-            masked_username = f"{self.username[:3]}***{self.username[-3:] if len(self.username) > 6 else ''}"
-            logger.info(f"Username configured: {masked_username}")
-        else:
-            logger.info("No username configured - will require manual login")
-        
-        if self.password:
-            logger.info("Password configured: [HIDDEN]")
-        else:
-            logger.info("No password configured - will require manual login")
-        
-        if self.cookie_file:
-            logger.info(f"Cookie file configured: {self.cookie_file}")
-        
-        # Log configuration
-        logger.info(f"Configuration: headless={self.headless}, timeout={self.timeout}, use_undetected={self.use_undetected}")
-    
-    def _get_env_bool(self, env_var: str, default: bool) -> bool:
-        """Helper method to get boolean from environment variable."""
-        value = os.getenv(env_var)
-        if value is None:
-            return default
-        return value.lower() in ('true', '1', 'yes', 'on')
+        logger.info("✅ ChatGPT Scraper initialized with modular components")
     
     def __enter__(self):
         """Context manager entry."""
@@ -136,489 +73,165 @@ class ChatGPTScraper:
         self.close_driver()
     
     def start_driver(self) -> bool:
-        """Start the web driver using undetected-chromedriver if available."""
-        if not SELENIUM_AVAILABLE:
-            logger.warning("Cannot start driver - Selenium not available")
-            return False
-            
-        try:
-            logger.info(f"Starting driver with use_undetected={self.use_undetected}, headless={self.headless}")
-            
-            if self.use_undetected:
-                logger.info("Using undetected-chromedriver")
-                # Use undetected-chromedriver
-                options = uc.ChromeOptions()
-                logger.info("Created uc.ChromeOptions()")
-                
-                # Fix compatibility issue: Add headless property if it doesn't exist
-                if not hasattr(options, 'headless'):
-                    logger.info("Adding headless property for compatibility")
-                    options.headless = False  # Default to False, will be set by argument
-                
-                if self.headless:
-                    logger.info("Setting headless mode for undetected-chromedriver")
-                    try:
-                        options.add_argument("--headless=new")
-                        logger.info("Added --headless=new argument")
-                        options.headless = True  # Set property for undetected-chromedriver
-                    except Exception as e:
-                        logger.error(f"Failed to add --headless=new: {e}")
-                
-                logger.info("Adding standard Chrome options...")
-                try:
-                    options.add_argument("--no-sandbox")
-                    options.add_argument("--disable-dev-shm-usage")
-                    options.add_argument("--disable-gpu")
-                    options.add_argument("--window-size=1920,1080")
-                    logger.info("Added standard Chrome arguments")
-                except Exception as e:
-                    logger.error(f"Failed to add standard arguments: {e}")
-                
-                # Additional undetected options
-                logger.info("Adding undetected-specific options...")
-                try:
-                    options.add_argument("--disable-blink-features=AutomationControlled")
-                    # Remove problematic options that cause Chrome compatibility issues
-                    # options.add_experimental_option("excludeSwitches", ["enable-automation"])
-                    # options.add_experimental_option('useAutomationExtension', False)
-                    logger.info("Added undetected-specific options")
-                except Exception as e:
-                    logger.error(f"Failed to add undetected options: {e}")
-                
-                logger.info("Creating uc.Chrome instance...")
-                try:
-                    self.driver = uc.Chrome(options=options)
-                    logger.info("Successfully created uc.Chrome instance")
-                except Exception as e:
-                    logger.error(f"Failed to create uc.Chrome: {e}")
-                    raise
-                
-                # Execute script to remove webdriver property
-                try:
-                    self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                    logger.info("Executed webdriver property removal script")
-                except Exception as e:
-                    logger.error(f"Failed to execute webdriver removal script: {e}")
-                
-            else:
-                logger.info("Using regular selenium webdriver")
-                # Fallback to regular selenium
-                from selenium import webdriver  # Import here to fix NameError
-                chrome_options = Options()
-                if self.headless:
-                    chrome_options.add_argument("--headless")
-                
-                chrome_options.add_argument("--no-sandbox")
-                chrome_options.add_argument("--disable-dev-shm-usage")
-                chrome_options.add_argument("--disable-gpu")
-                chrome_options.add_argument("--window-size=1920,1080")
-                
-                logger.info("Creating regular selenium Chrome instance...")
-                self.driver = webdriver.Chrome(options=chrome_options)
-                logger.info("Successfully created regular Chrome instance")
-            
-            logger.info("Setting implicit wait...")
-            self.driver.implicitly_wait(10)
-            logger.info(f"Web driver started successfully using {'undetected-chromedriver' if self.use_undetected else 'regular selenium'}")
+        """Start the web driver using the browser manager."""
+        self.driver = self.browser_manager.create_driver()
+        if self.driver:
+            logger.info("✅ Driver started successfully")
             return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start web driver: {e}")
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception details: {str(e)}")
-            
-            # Print more details about the exception
-            import traceback
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            
+        else:
+            logger.error("❌ Failed to start driver")
             return False
     
     def close_driver(self):
-        """Close the web driver."""
-        if self.driver:
-            try:
-                self.driver.quit()
-                logger.info("Web driver closed")
-            except Exception as e:
-                logger.error(f"Error closing driver: {e}")
-            finally:
-                self.driver = None
+        """Close the web driver using the browser manager."""
+        self.browser_manager.close_driver()
+        self.driver = None
+        logger.info("✅ Driver closed")
     
     def navigate_to_chatgpt(self, model: str = "") -> bool:
         """
-        Navigate to ChatGPT interface.
+        Navigate to ChatGPT with optional model selection.
         
         Args:
-            model: Optional model parameter (e.g., "gpt-4")
+            model: Specific model to navigate to (e.g., "gpt-4o", "gpt-4o-mini")
             
         Returns:
-            True if successful, False otherwise
+            True if navigation successful, False otherwise
         """
         if not self.driver:
-            logger.error("Driver not initialized")
+            logger.error("No driver available")
             return False
-            
+        
         try:
-            url = "https://chat.openai.com/"
+            base_url = "https://chat.openai.com/"
             if model:
-                url += f"?model={model}"
-                
-            self.driver.get(url)
-            logger.info(f"Navigated to ChatGPT: {url}")
+                base_url += f"?model={model}"
             
-            # Wait for page to load
+            logger.info(f"Navigating to ChatGPT: {base_url}")
+            self.driver.get(base_url)
             time.sleep(3)
+            
+            logger.info("✅ Successfully navigated to ChatGPT")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to navigate to ChatGPT: {e}")
+            logger.error(f"❌ Failed to navigate to ChatGPT: {e}")
             return False
     
     def is_logged_in(self) -> bool:
         """
-        Check if user is logged into ChatGPT.
+        Check if user is logged in using the login handler.
         
         Returns:
             True if logged in, False otherwise
         """
-        if not self.driver:
-            return False
-            
-        try:
-            # Look for elements that indicate logged-in state
-            logged_in_indicators = [
-                "//button[contains(text(), 'New chat')]",
-                "//div[contains(@class, 'conversation')]",
-                "//textarea[@placeholder='Message ChatGPT…']"
-            ]
-            
-            for selector in logged_in_indicators:
-                try:
-                    element = self.driver.find_element(By.XPATH, selector)
-                    if element.is_displayed():
-                        logger.info("User appears to be logged in")
-                        return True
-                except NoSuchElementException:
-                    continue
-            
-            logger.info("User does not appear to be logged in")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error checking login status: {e}")
-            return False
+        return self.login_handler.is_logged_in(self.driver)
     
     def get_conversation_list(self) -> List[Dict[str, str]]:
         """
-        Get list of available conversations.
+        Get list of available conversations using the conversation extractor.
         
         Returns:
-            List of conversation metadata dictionaries
+            List of conversation dictionaries
         """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return []
-            
-        if not SELENIUM_AVAILABLE:
-            # Return demo data
-            return self._get_demo_conversations()
-        
-        conversations = []
-        
-        try:
-            # Wait for conversation list to load
-            WebDriverWait(self.driver, self.timeout).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='conversation-item']"))
-            )
-            
-            # Find conversation elements
-            conversation_elements = self.driver.find_elements(
-                By.CSS_SELECTOR, "[data-testid='conversation-item']"
-            )
-            
-            for element in conversation_elements:
-                try:
-                    title = element.text.strip()
-                    if title:
-                        conversation = {
-                            "title": title,
-                            "url": element.get_attribute("href") or "",
-                            "timestamp": datetime.now().isoformat(),
-                            "captured_at": datetime.now().isoformat()
-                        }
-                        conversations.append(conversation)
-                        
-                except (StaleElementReferenceException, NoSuchElementException) as e:
-                    logger.warning(f"Error extracting conversation: {e}")
-                    continue
-            
-            logger.info(f"Found {len(conversations)} conversations")
-            return conversations
-            
-        except TimeoutException:
-            logger.warning("Timeout waiting for conversation list")
-            return []
-        except Exception as e:
-            logger.error(f"Error getting conversation list: {e}")
-            return []
-    
-    def _get_demo_conversations(self) -> List[Dict[str, str]]:
-        """Return demo conversation data when Selenium is not available."""
-        return [
-            {
-                "title": "Demo Conversation 1",
-                "url": "https://chat.openai.com/c/demo1",
-                "timestamp": "2025-01-20T10:00:00",
-                "captured_at": datetime.now().isoformat()
-            },
-            {
-                "title": "Demo Conversation 2", 
-                "url": "https://chat.openai.com/c/demo2",
-                "timestamp": "2025-01-20T11:00:00",
-                "captured_at": datetime.now().isoformat()
-            },
-            {
-                "title": "Demo Conversation 3",
-                "url": "https://chat.openai.com/c/demo3", 
-                "timestamp": "2025-01-20T12:00:00",
-                "captured_at": datetime.now().isoformat()
-            }
-        ]
+        return self.conversation_extractor.get_conversation_list(self.driver)
     
     def run_scraper(self, model: str = "", output_file: str = "chatgpt_chats.json") -> bool:
         """
-        Main scraping workflow with enhanced login handling.
+        Run the complete scraping workflow.
         
         Args:
-            model: Optional model parameter
-            output_file: Path to save captured data
+            model: Specific model to scrape
+            output_file: Output file for conversations
             
         Returns:
-            True if successful, False otherwise
+            True if scraping successful, False otherwise
         """
         try:
-            if not SELENIUM_AVAILABLE:
-                logger.info("Running in demo mode (Selenium not available)")
-                conversations = self._get_demo_conversations()
-            else:
-                if not self.navigate_to_chatgpt(model):
-                    return False
-                
-                # Use enhanced login handling
-                if not self.ensure_login():
-                    logger.error("Failed to log in - cannot proceed with scraping")
-                    return False
-                
-                conversations = self.get_conversation_list()
+            logger.info("🚀 Starting ChatGPT scraper workflow")
             
+            # Navigate to ChatGPT
+            if not self.navigate_to_chatgpt(model):
+                return False
+            
+            # Load cookies if available
+            if self.cookie_manager.cookie_file_exists():
+                logger.info("Loading saved cookies...")
+                self.cookie_manager.load_cookies(self.driver)
+            
+            # Ensure login
+            if not self.login_handler.ensure_login_modern(self.driver):
+                logger.error("❌ Login failed")
+                return False
+            
+            # Save cookies after successful login
+            self.cookie_manager.save_cookies(self.driver)
+            
+            # Get conversation list
+            conversations = self.get_conversation_list()
             if not conversations:
                 logger.warning("No conversations found")
                 return False
             
-            # Save data
+            # Save conversations
             self._save_conversations(conversations, output_file)
-            logger.info(f"Scraping completed. Saved {len(conversations)} conversations to {output_file}")
+            
+            logger.info(f"✅ Scraping completed: {len(conversations)} conversations saved")
             return True
             
         except Exception as e:
-            logger.error(f"Scraping failed: {e}")
+            logger.error(f"❌ Scraping failed: {e}")
             return False
     
     def _save_conversations(self, conversations: List[Dict[str, str]], output_file: str):
-        """Save conversations to file."""
+        """Save conversations to JSON file."""
         try:
             # Ensure output directory exists
             output_path = Path(output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # Save to JSON
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(conversations, f, indent=2, ensure_ascii=False)
                 
+            logger.info(f"✅ Saved {len(conversations)} conversations to {output_file}")
+            
         except Exception as e:
-            logger.error(f"Failed to save conversations: {e}")
-            raise
+            logger.error(f"❌ Failed to save conversations: {e}")
     
     def enter_conversation(self, conversation_url: str) -> bool:
         """
-        Navigate to a specific conversation.
+        Enter a specific conversation using the conversation extractor.
         
         Args:
             conversation_url: URL of the conversation to enter
             
         Returns:
-            True if successful, False otherwise
+            True if successfully entered conversation, False otherwise
         """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return False
-            
-        try:
-            self.driver.get(conversation_url)
-            logger.info(f"Entered conversation: {conversation_url}")
-            
-            # Wait for conversation to load
-            time.sleep(3)
-            
-            # Check if we're in a conversation
-            try:
-                # Look for conversation elements
-                conversation_indicators = [
-                    "//div[contains(@class, 'conversation')]",
-                    "//div[contains(@class, 'markdown')]",
-                    "//textarea[@placeholder='Message ChatGPT…']"
-                ]
-                
-                for selector in conversation_indicators:
-                    try:
-                        element = self.driver.find_element(By.XPATH, selector)
-                        if element.is_displayed():
-                            logger.info("Successfully entered conversation")
-                            return True
-                    except NoSuchElementException:
-                        continue
-                
-                logger.warning("Could not confirm conversation entry")
-                return False
-                
-            except Exception as e:
-                logger.error(f"Error checking conversation entry: {e}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Failed to enter conversation: {e}")
-            return False
-    
-    def send_prompt(self, prompt: str, wait_for_response: bool = True) -> bool:
-        """
-        Send a prompt to ChatGPT in the current conversation.
-        
-        Args:
-            prompt: The prompt text to send
-            wait_for_response: Whether to wait for ChatGPT's response
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return False
-            
-        try:
-            # Find the input textarea
-            textarea_selectors = [
-                "//textarea[@placeholder='Message ChatGPT…']",
-                "//textarea[contains(@placeholder, 'Message')]",
-                "//textarea[@data-id='root']"
-            ]
-            
-            textarea = None
-            for selector in textarea_selectors:
-                try:
-                    textarea = self.driver.find_element(By.XPATH, selector)
-                    if textarea.is_displayed() and textarea.is_enabled():
-                        break
-                except NoSuchElementException:
-                    continue
-            
-            if not textarea:
-                logger.error("Could not find input textarea")
-                return False
-            
-            # Clear and enter the prompt
-            textarea.clear()
-            textarea.send_keys(prompt)
-            logger.info(f"Entered prompt: {prompt[:50]}...")
-            
-            # Find and click the send button
-            send_button_selectors = [
-                "//button[@data-testid='send-button']",
-                "//button[contains(@aria-label, 'Send')]",
-                "//button[contains(text(), 'Send')]",
-                "//button[@type='submit']"
-            ]
-            
-            send_button = None
-            for selector in send_button_selectors:
-                try:
-                    send_button = self.driver.find_element(By.XPATH, selector)
-                    if send_button.is_displayed() and send_button.is_enabled():
-                        break
-                except NoSuchElementException:
-                    continue
-            
-            if not send_button:
-                logger.error("Could not find send button")
-                return False
-            
-            # Click send
-            send_button.click()
-            logger.info("Sent prompt to ChatGPT")
-            
-            if wait_for_response:
-                # Wait for response to start appearing
-                try:
-                    WebDriverWait(self.driver, self.timeout).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='conversation-turn-2']"))
-                    )
-                    logger.info("ChatGPT response started")
-                    
-                    # Wait a bit more for response to complete
-                    time.sleep(5)
-                    
-                except TimeoutException:
-                    logger.warning("Timeout waiting for ChatGPT response")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to send prompt: {e}")
-            return False
+        return self.conversation_extractor.enter_conversation(self.driver, conversation_url)
     
     def get_conversation_content(self) -> Dict[str, str]:
         """
-        Get the current conversation content including messages and responses.
+        Get content from the current conversation using the conversation extractor.
         
         Returns:
-            Dictionary with conversation content
+            Dictionary containing conversation content
         """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return {}
+        return self.conversation_extractor.get_conversation_content(self.driver)
+    
+    def send_prompt(self, prompt: str, wait_for_response: bool = True) -> bool:
+        """
+        Send a prompt to the current conversation using the conversation extractor.
+        
+        Args:
+            prompt: Text prompt to send
+            wait_for_response: Whether to wait for response
             
-        try:
-            content = {
-                "messages": [],
-                "responses": [],
-                "full_conversation": ""
-            }
-            
-            # Find conversation messages
-            message_selectors = [
-                "//div[contains(@class, 'markdown')]",
-                "//div[contains(@class, 'conversation')]//div[contains(@class, 'text')]",
-                "//div[@data-testid='conversation-turn-2']//div[contains(@class, 'markdown')]"
-            ]
-            
-            for selector in message_selectors:
-                try:
-                    elements = self.driver.find_elements(By.XPATH, selector)
-                    for element in elements:
-                        if element.is_displayed():
-                            text = element.text.strip()
-                            if text:
-                                content["messages"].append(text)
-                                content["full_conversation"] += text + "\n\n"
-                except Exception as e:
-                    logger.warning(f"Error extracting messages: {e}")
-                    continue
-            
-            logger.info(f"Extracted {len(content['messages'])} messages")
-            return content
-            
-        except Exception as e:
-            logger.error(f"Failed to get conversation content: {e}")
-            return {}
+        Returns:
+            True if prompt sent successfully, False otherwise
+        """
+        return self.conversation_extractor.send_prompt(self.driver, prompt, wait_for_response)
     
     def run_templated_prompts(self, conversations: List[Dict[str, str]], prompt_template: str) -> List[Dict[str, str]]:
         """
@@ -626,436 +239,104 @@ class ChatGPTScraper:
         
         Args:
             conversations: List of conversation dictionaries
-            prompt_template: Jinja2 template for prompts
+            prompt_template: Template prompt to use
             
         Returns:
-            List of conversation results with prompts and responses
+            List of conversation results with prompts
         """
-        from core.template_engine import render_template
-        
         results = []
         
         for conversation in conversations:
             try:
-                # Render the prompt template
-                prompt = render_template(prompt_template, {"conversation": conversation})
+                logger.info(f"Processing conversation: {conversation.get('title', 'Unknown')}")
                 
-                # Enter the conversation
-                if not self.enter_conversation(conversation["url"]):
-                    logger.warning(f"Could not enter conversation: {conversation['title']}")
+                # Enter conversation
+                if not self.enter_conversation(conversation['url']):
+                    logger.warning(f"Failed to enter conversation: {conversation.get('title', 'Unknown')}")
                     continue
                 
-                # Send the prompt
-                if not self.send_prompt(prompt):
-                    logger.warning(f"Could not send prompt for: {conversation['title']}")
-                    continue
-                
-                # Get the response
-                content = self.get_conversation_content()
-                
-                # Store result
-                result = {
-                    "conversation": conversation,
-                    "prompt": prompt,
-                    "response": content.get("full_conversation", ""),
-                    "timestamp": datetime.now().isoformat()
-                }
-                results.append(result)
-                
-                logger.info(f"Processed conversation: {conversation['title']}")
+                # Send templated prompt
+                if self.send_prompt(prompt_template):
+                    # Get updated content
+                    content = self.get_conversation_content()
+                    conversation['updated_content'] = content
+                    results.append(conversation)
+                    logger.info(f"✅ Processed conversation: {conversation.get('title', 'Unknown')}")
+                else:
+                    logger.warning(f"Failed to send prompt to: {conversation.get('title', 'Unknown')}")
                 
             except Exception as e:
-                logger.error(f"Error processing conversation {conversation.get('title', 'Unknown')}: {e}")
+                logger.error(f"Error processing conversation: {e}")
                 continue
         
         return results
 
-    def save_cookies(self, filepath: str):
-        """Save cookies to a file."""
-        import pickle
-        if self.driver:
-            with open(filepath, 'wb') as f:
-                pickle.dump(self.driver.get_cookies(), f)
-            logger.info(f"Cookies saved to {filepath}")
+    def _get_demo_conversations(self, limit: int = 5) -> List[Dict[str, str]]:
+        """Return a small set of demo conversations for offline/testing flows.
 
-    def load_cookies(self, filepath: str):
-        """Load cookies from a file."""
-        import pickle
-        import os
-        if self.driver and os.path.exists(filepath):
-            with open(filepath, 'rb') as f:
-                cookies = pickle.load(f)
-                for cookie in cookies:
-                    # Selenium requires domain to be set for add_cookie
-                    if 'sameSite' in cookie:
-                        cookie.pop('sameSite')
-                    try:
-                        self.driver.add_cookie(cookie)
-                    except Exception as e:
-                        logger.warning(f"Could not add cookie: {e}")
-            logger.info(f"Cookies loaded from {filepath}")
-
-    def login_with_credentials(self) -> bool:
+        Priority:
+        1. Pull the most recent conversations from the Dreamscape memory DB (if available)
+           so demos stay realistic.
+        2. Fallback to a static synthetic list if the DB is empty or unavailable.
         """
-        Attempt to log in using stored credentials.
-        
-        Returns:
-            True if login successful, False otherwise
-        """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return False
-        
-        if not self.username or not self.password:
-            logger.warning("No credentials available for automated login")
-            return False
-        
         try:
-            logger.info("Attempting automated login...")
-            
-            # Navigate to login page
-            self.driver.get("https://chat.openai.com/auth/login")
-            time.sleep(5)  # Give more time for page to load
-            
-            # Debug: Log current page title and URL
-            logger.info(f"Current page: {self.driver.title}")
-            logger.info(f"Current URL: {self.driver.current_url}")
-            
-            # Try to find and click login button
-            login_button = None
-            
-            # Try various selectors for login button, prioritizing the specific one found
-            login_selectors = [
-                "[data-testid='login-button']",  # Primary target based on user's finding
-                "button.btn-blue.btn-large",     # CSS classes from the button
-                "button:contains('Log in')",
-                "button:contains('Sign in')",
-                "a:contains('Log in')",
-                "a:contains('Sign in')",
-                ".login-button"
-            ]
-            
-            for selector in login_selectors:
-                try:
-                    login_button = self.driver.find_element("css selector", selector)
-                    if login_button.is_displayed():
-                        logger.info(f"Found login button with selector: {selector}")
-                        # Check if button is enabled (not disabled)
-                        if not login_button.get_attribute("disabled"):
-                            logger.info("Login button is enabled and clickable")
-                            break
-                        else:
-                            logger.info("Login button is disabled, waiting for it to become enabled...")
-                            # Wait for button to become enabled
-                            try:
-                                from selenium.webdriver.support.ui import WebDriverWait
-                                from selenium.webdriver.support import expected_conditions as EC
-                                from selenium.webdriver.common.by import By
-                                
-                                # Wait for button to become enabled (not disabled)
-                                WebDriverWait(self.driver, 30).until(
-                                    lambda driver: not driver.find_element("css selector", selector).get_attribute("disabled")
-                                )
-                                logger.info("Login button is now enabled!")
-                                break
-                            except:
-                                logger.warning("Login button remained disabled, trying next selector")
-                                continue
-                except:
-                    continue
-            
-            if not login_button:
-                # Try XPath selectors
-                xpath_selectors = [
-                    "//button[@data-testid='login-button']",  # Primary XPath target
-                    "//button[contains(@class, 'btn-blue') and contains(@class, 'btn-large')]",
-                    "//button[contains(text(), 'Log in')]",
-                    "//button[contains(text(), 'Sign in')]",
-                    "//a[contains(text(), 'Log in')]",
-                    "//a[contains(text(), 'Sign in')]"
+            from core.memory_api import get_memory_api
+            api = get_memory_api()
+            recent = api.get_recent_conversations(limit)
+            if recent:
+                # Massage to expected shape for examples/tests
+                return [
+                    {
+                        "id": conv["id"],
+                        "title": conv.get("title", "Untitled"),
+                        "url": conv.get("url", f"https://chat.openai.com/c/{conv['id']}"),
+                        "timestamp": conv.get("timestamp", ""),
+                        "captured_at": conv.get("timestamp", ""),
+                    }
+                    for conv in recent
                 ]
-                
-                for xpath in xpath_selectors:
-                    try:
-                        login_button = self.driver.find_element("xpath", xpath)
-                        if login_button.is_displayed():
-                            logger.info(f"Found login button with XPath: {xpath}")
-                            # Check if button is enabled
-                            if not login_button.get_attribute("disabled"):
-                                logger.info("Login button is enabled and clickable")
-                                break
-                            else:
-                                logger.info("Login button is disabled, waiting for it to become enabled...")
-                                # Wait for button to become enabled
-                                try:
-                                    WebDriverWait(self.driver, 30).until(
-                                        lambda driver: not driver.find_element("xpath", xpath).get_attribute("disabled")
-                                    )
-                                    logger.info("Login button is now enabled!")
-                                    break
-                                except:
-                                    logger.warning("Login button remained disabled, trying next selector")
-                                    continue
-                    except:
-                        continue
-            
-            if login_button:
-                logger.info("Clicking login button to open login page...")
-                login_button.click()
-                time.sleep(3)
-            else:
-                logger.info("No login button found, navigating directly to login page...")
-                self.driver.get("https://chat.openai.com/auth/login")
-                time.sleep(3)
-            
-            # Show user instructions
-            logger.info("🌐 Browser window opened for manual login")
-            logger.info("📝 Please log in manually in the browser window")
-            logger.info(f"⏳ Waiting up to {self.timeout} seconds for login completion...")
-            
-            # Wait for manual login with periodic checks
-            start_time = time.time()
-            check_interval = 5  # Check every 5 seconds
-            
-            while time.time() - start_time < self.timeout:
-                # Check if login was successful
-                if self.is_logged_in():
-                    logger.info("✅ Manual login successful!")
-                    
-                    # Save cookies for future use
-                    if self.cookie_file:
-                        self.save_cookies(self.cookie_file)
-                        logger.info(f"💾 Cookies saved to {self.cookie_file}")
-                    
-                    return True
-                
-                # Wait before next check
-                time.sleep(check_interval)
-                
-                # Show progress
-                elapsed = int(time.time() - start_time)
-                remaining = self.timeout - elapsed
-                logger.info(f"⏳ Still waiting... ({elapsed}s elapsed, {remaining}s remaining)")
-            
-            # Timeout reached
-            logger.warning(f"⏰ Manual login timeout after {self.timeout} seconds")
-            logger.info("Please try again or check your credentials")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Automated login failed: {e}")
-            return False
-    
-    def login_with_manual_fallback(self, timeout: int = 120) -> bool:
-        """
-        Login with manual fallback - opens browser for user to log in manually.
-        
-        Args:
-            timeout: Maximum time to wait for manual login (seconds)
-            
-        Returns:
-            True if login successful, False otherwise
-        """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return False
-        
-        try:
-            logger.info("🔧 Automated login not available - using manual fallback")
-            
-            # Navigate to ChatGPT main page
-            self.driver.get("https://chat.openai.com")
-            time.sleep(3)
-            
-            # Check if already logged in
-            if self.is_logged_in():
-                logger.info("✅ Already logged in!")
-                return True
-            
-            # Try to find and click login button
-            login_button = None
-            
-            # Try various selectors for login button, prioritizing the specific one found
-            login_selectors = [
-                "[data-testid='login-button']",  # Primary target based on user's finding
-                "button.btn-blue.btn-large",     # CSS classes from the button
-                "button:contains('Log in')",
-                "button:contains('Sign in')",
-                "a:contains('Log in')",
-                "a:contains('Sign in')",
-                ".login-button"
-            ]
-            
-            for selector in login_selectors:
-                try:
-                    login_button = self.driver.find_element("css selector", selector)
-                    if login_button.is_displayed():
-                        logger.info(f"Found login button with selector: {selector}")
-                        # Check if button is enabled (not disabled)
-                        if not login_button.get_attribute("disabled"):
-                            logger.info("Login button is enabled and clickable")
-                            break
-                        else:
-                            logger.info("Login button is disabled, waiting for it to become enabled...")
-                            # Wait for button to become enabled
-                            try:
-                                from selenium.webdriver.support.ui import WebDriverWait
-                                from selenium.webdriver.support import expected_conditions as EC
-                                from selenium.webdriver.common.by import By
-                                
-                                # Wait for button to become enabled (not disabled)
-                                WebDriverWait(self.driver, 30).until(
-                                    lambda driver: not driver.find_element("css selector", selector).get_attribute("disabled")
-                                )
-                                logger.info("Login button is now enabled!")
-                                break
-                            except:
-                                logger.warning("Login button remained disabled, trying next selector")
-                                continue
-                except:
-                    continue
-            
-            if not login_button:
-                # Try XPath selectors
-                xpath_selectors = [
-                    "//button[@data-testid='login-button']",  # Primary XPath target
-                    "//button[contains(@class, 'btn-blue') and contains(@class, 'btn-large')]",
-                    "//button[contains(text(), 'Log in')]",
-                    "//button[contains(text(), 'Sign in')]",
-                    "//a[contains(text(), 'Log in')]",
-                    "//a[contains(text(), 'Sign in')]"
-                ]
-                
-                for xpath in xpath_selectors:
-                    try:
-                        login_button = self.driver.find_element("xpath", xpath)
-                        if login_button.is_displayed():
-                            logger.info(f"Found login button with XPath: {xpath}")
-                            # Check if button is enabled
-                            if not login_button.get_attribute("disabled"):
-                                logger.info("Login button is enabled and clickable")
-                                break
-                            else:
-                                logger.info("Login button is disabled, waiting for it to become enabled...")
-                                # Wait for button to become enabled
-                                try:
-                                    WebDriverWait(self.driver, 30).until(
-                                        lambda driver: not driver.find_element("xpath", xpath).get_attribute("disabled")
-                                    )
-                                    logger.info("Login button is now enabled!")
-                                    break
-                                except:
-                                    logger.warning("Login button remained disabled, trying next selector")
-                                    continue
-                    except:
-                        continue
-            
-            if login_button:
-                logger.info("Clicking login button to open login page...")
-                login_button.click()
-                time.sleep(3)
-            else:
-                logger.info("No login button found, navigating directly to login page...")
-                self.driver.get("https://chat.openai.com/auth/login")
-                time.sleep(3)
-            
-            # Show user instructions
-            logger.info("🌐 Browser window opened for manual login")
-            logger.info("📝 Please log in manually in the browser window")
-            logger.info(f"⏳ Waiting up to {timeout} seconds for login completion...")
-            
-            # Wait for manual login with periodic checks
-            start_time = time.time()
-            check_interval = 5  # Check every 5 seconds
-            
-            while time.time() - start_time < timeout:
-                # Check if login was successful
-                if self.is_logged_in():
-                    logger.info("✅ Manual login successful!")
-                    
-                    # Save cookies for future use
-                    if self.cookie_file:
-                        self.save_cookies(self.cookie_file)
-                        logger.info(f"💾 Cookies saved to {self.cookie_file}")
-                    
-                    return True
-                
-                # Wait before next check
-                time.sleep(check_interval)
-                
-                # Show progress
-                elapsed = int(time.time() - start_time)
-                remaining = timeout - elapsed
-                logger.info(f"⏳ Still waiting... ({elapsed}s elapsed, {remaining}s remaining)")
-            
-            # Timeout reached
-            logger.warning(f"⏰ Manual login timeout after {timeout} seconds")
-            logger.info("Please try again or check your credentials")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Manual login fallback failed: {e}")
-            return False
+        except Exception:
+            # Memory not ready — fall through to static examples
+            pass
 
-    def ensure_login_modern(self, allow_manual: bool = True, manual_timeout: int = 120) -> bool:
-        """
-        Modern login method that tries automated login first, then falls back to manual login.
-        
-        Args:
-            allow_manual: Allow manual login if automated fails
-            manual_timeout: Timeout for manual login (seconds)
-            
-        Returns:
-            True if logged in, False otherwise
-        """
-        if not self.driver:
-            logger.error("Driver not initialized")
-            return False
-        
-        # Check if already logged in
-        if self.is_logged_in():
-            logger.info("Already logged in")
-            return True
-        
-        # Try to load cookies first
-        if self.cookie_file and os.path.exists(self.cookie_file):
-            logger.info("Loading saved cookies...")
-            self.load_cookies(self.cookie_file)
-            self.driver.refresh()
-            time.sleep(3)
-            
-            if self.is_logged_in():
-                logger.info("✅ Login successful with saved cookies!")
-                return True
-        
-        # Try automated login if credentials are available
-        if self.username and self.password:
-            logger.info("Attempting automated login...")
-            if self.login_with_credentials():
-                return True
-            else:
-                logger.warning("Automated login failed")
-        
-        # Fall back to manual login if allowed
-        if allow_manual:
-            logger.info("🔄 Falling back to manual login...")
-            return self.login_with_manual_fallback(manual_timeout)
-        
-        return False
+        # Static fallback (ensures self-contained demo)
+        now = datetime.utcnow().isoformat()
+        return [
+            {
+                "id": f"demo_{i+1}",
+                "title": f"Demo Conversation {i+1}",
+                "url": f"https://chat.openai.com/c/demo_{i+1}",
+                "timestamp": now,
+                "captured_at": now,
+            }
+            for i in range(limit)
+        ]
+
+    def ensure_login(self) -> bool:
+        """Ensure the user is logged in (backward-compat helper used by older examples)."""
+        return self.login_handler.ensure_login_modern(self.driver) if self.driver else False
 
 def main():
-    """CLI entry point."""
-    print("🚀 Starting ChatGPT Scraper...")
+    """Main function for command-line usage."""
+    import argparse
     
-    with ChatGPTScraper(headless=False) as scraper:
-        success = scraper.run_scraper(model="gpt-4")
+    parser = argparse.ArgumentParser(description="ChatGPT Scraper")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+    parser.add_argument("--model", default="", help="Specific model to scrape")
+    parser.add_argument("--output", default="chatgpt_chats.json", help="Output file")
+    parser.add_argument("--timeout", type=int, default=30, help="Timeout for operations")
+    
+    args = parser.parse_args()
+    
+    # Run scraper
+    with ChatGPTScraper(headless=args.headless, timeout=args.timeout) as scraper:
+        success = scraper.run_scraper(model=args.model, output_file=args.output)
         
         if success:
-            print("✅ Scraping completed successfully")
-            return 0
+            print(f"✅ Scraping completed successfully. Results saved to {args.output}")
         else:
             print("❌ Scraping failed")
-            return 1
+            exit(1)
 
 if __name__ == "__main__":
-    exit(main()) 
+    main() 

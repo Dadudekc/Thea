@@ -1,510 +1,657 @@
+#!/usr/bin/env python3
 """
-Digital Dreamscape - Memory Nexus Manager
-The central repository for storing and retrieving conversation chronicles
+Dream.OS Memory Manager
+=======================
+
+Core memory system for persistent conversation storage, indexing, and retrieval.
+Enables multi-memory context sharing across agents.
 """
 
+import glob
 import os
-import json
-import sqlite3
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any, Tuple
+import logging
+import hashlib
 from pathlib import Path
-from sqlalchemy.sql import func
+from typing import List, Dict, Optional, Any
+from shutil import copy2
+import sqlite3
+import random
+import string
+from datetime import datetime
+import json
 
-from .models import (
-    Conversation, Message, Tag, ConversationTag, AnalysisResult, 
-    Template, Setting, create_database_session, get_db_session
-)
+# Import storage and processor modules
+from .memory_storage import MemoryStorage
+from .memory_content_processor import MemoryContentProcessor
+from .memory_prompt_processor import MemoryPromptProcessor
 
-class MemoryNexus:
-    """The Memory Nexus - central repository for conversation data"""
+logger = logging.getLogger(__name__)
+
+class MemoryManager:
+    """
+    Core memory management system for Dream.OS.
     
-    def __init__(self, db_path: str = None):
-        """Initialize the Memory Nexus with database path"""
-        if db_path is None:
-            # Default to data directory
-            data_dir = Path("data")
-            data_dir.mkdir(exist_ok=True)
-            db_path = str(data_dir / "dreamscape.db")
+    Handles:
+    - Conversation ingestion and indexing
+    - Context retrieval and search
+    - Memory persistence across agents
+    """
+    
+    def __init__(self, db_path: str = "dreamos_memory.db"):
+        """
+        Initialize the Memory Manager.
         
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.storage = MemoryStorage(db_path)
+        self.content_processor = MemoryContentProcessor(self.storage)
+        self.prompt_processor = MemoryPromptProcessor(self.storage)
+        # EDIT START legacy-shim
+        # Expose the underlying SQLite connection and DB path so existing tests that
+        # reach into these internals keep passing until they are refactored.
+        self.conn = self.storage.conn
         self.db_path = db_path
-        self.SessionLocal = create_database_session(db_path)
-        
-        # Ensure database exists and has default data
-        self._initialize_database()
+        # EDIT END legacy-shim
     
-    def _initialize_database(self):
-        """Initialize database with schema and default data"""
-        # Create tables
-        engine = self.SessionLocal().bind
-        from .models import Base
-        Base.metadata.create_all(engine)
-        
-        # Initialize with default data if empty
-        with self.SessionLocal() as session:
-            # Check if we have any templates
-            template_count = session.query(Template).count()
-            if template_count == 0:
-                self._create_default_templates(session)
-            
-            # Check if we have any settings
-            setting_count = session.query(Setting).count()
-            if setting_count == 0:
-                self._create_default_settings(session)
-    
-    def _create_default_templates(self, session):
-        """Create default analysis templates"""
-        default_templates = [
-            {
-                'name': 'Basic Summary',
-                'description': 'Generate a basic summary of the conversation',
-                'template_content': '''Please provide a concise summary of this conversation, highlighting the key points and main takeaways.
+    def _normalize_conversation_json(self, raw: Any, file_path: str) -> Dict[str, Any]:
+        """Convert multiple raw JSON shapes into a uniform conversation dict.
 
-Conversation Title: {{ conversation.title }}
-Message Count: {{ conversation.message_count }}''',
-                'category': 'summary',
-                'is_default': True
-            },
-            {
-                'name': 'Topic Analysis',
-                'description': 'Extract main topics and themes from the conversation',
-                'template_content': '''Analyze this conversation and identify the main topics, themes, and key concepts discussed.
+        Supported formats:
+        1. Raw list[dict|str]  -> assume ChatGPT-like messages list.
+        2. Dict with "messages" -> already normalised.
+        3. Dict with "mapping"  -> ChatGPT official export format.
+        4. Anything else        -> wrap as a single system message string.
+        """
+        from datetime import datetime
+        import hashlib
+        from pathlib import Path
 
-Conversation Title: {{ conversation.title }}
-Please provide:
-1. Main topics (3-5 key areas)
-2. Important themes
-3. Key insights or conclusions''',
-                'category': 'analysis',
-                'is_default': True
-            },
-            {
-                'name': 'Action Items',
-                'description': 'Extract action items and next steps from the conversation',
-                'template_content': '''Review this conversation and identify any action items, tasks, or next steps mentioned.
+        # Helper to fabricate an ID from the filename for repeatability
+        file_stem = Path(file_path).stem
+        fallback_id = hashlib.md5(file_stem.encode()).hexdigest()[:12]
 
-Conversation Title: {{ conversation.title }}
-Please list:
-1. Action items with assignees (if mentioned)
-2. Deadlines or timeframes
-3. Dependencies or blockers
-4. Priority levels''',
-                'category': 'actions',
-                'is_default': True
-            }
-        ]
-        
-        for template_data in default_templates:
-            template = Template(**template_data)
-            session.add(template)
-        
-        session.commit()
-    
-    def _create_default_settings(self, session):
-        """Create default application settings"""
-        default_settings = [
-            {'key': 'database_version', 'value': '1.0', 'description': 'Current database schema version'},
-            {'key': 'max_conversations', 'value': '10000', 'description': 'Maximum number of conversations to store'},
-            {'key': 'auto_analyze', 'value': 'false', 'description': 'Automatically analyze new conversations'},
-            {'key': 'default_template', 'value': '1', 'description': 'Default template ID for new analyses'},
-            {'key': 'backup_enabled', 'value': 'true', 'description': 'Enable automatic database backups'},
-            {'key': 'backup_interval_hours', 'value': '24', 'description': 'Hours between automatic backups'}
-        ]
-        
-        for setting_data in default_settings:
-            setting = Setting(**setting_data)
-            session.add(setting)
-        
-        session.commit()
-    
-    # Conversation Management
-    def save_conversation(self, conversation_data: Dict[str, Any]) -> int:
-        """Save a conversation to the database"""
-        with self.SessionLocal() as session:
-            # Check if conversation already exists
-            existing = session.query(Conversation).filter_by(url=conversation_data.get('url')).first()
-            if existing:
-                # Update existing conversation
-                existing.title = conversation_data.get('title', existing.title)
-                existing.updated_at = datetime.now()
-                if 'metadata' in conversation_data:
-                    existing.set_metadata(conversation_data['metadata'])
-                conversation_id = existing.id
-            else:
-                # Create new conversation
-                conversation = Conversation(
-                    title=conversation_data.get('title', 'Untitled'),
-                    url=conversation_data.get('url'),
-                    source=conversation_data.get('source', 'chatgpt'),
-                    status=conversation_data.get('status', 'active')
-                )
-                if 'metadata' in conversation_data:
-                    conversation.set_metadata(conversation_data['metadata'])
-                session.add(conversation)
-                session.flush()  # Get the ID
-                conversation_id = conversation.id
-            # Save messages if provided
-            if 'messages' in conversation_data:
-                self._save_messages(session, conversation_id, conversation_data['messages'])
-                session.flush()  # Ensure messages are written
-                # Update message_count and word_count after saving messages
-                conv = session.query(Conversation).filter_by(id=conversation_id).first()
-                conv.message_count = session.query(Message).filter_by(conversation_id=conversation_id).count()
-                conv.word_count = session.query(Message).filter_by(conversation_id=conversation_id).with_entities(func.sum(Message.word_count)).scalar() or 0
-                session.commit()  # Commit after updating counts
-                session.refresh(conv)  # Refresh to ensure up-to-date
-            else:
-                session.commit()
-            return conversation_id
-    
-    def _save_messages(self, session, conversation_id: int, messages: List[Dict[str, Any]]):
-        """Save messages for a conversation"""
-        # Clear existing messages
-        session.query(Message).filter_by(conversation_id=conversation_id).delete()
-        
-        # Add new messages
-        for i, msg_data in enumerate(messages):
-            message = Message(
-                conversation_id=conversation_id,
-                role=msg_data.get('role', 'user'),
-                content=msg_data.get('content', ''),
-                message_index=i,
-                timestamp=msg_data.get('timestamp', datetime.now())
-            )
-            
-            # Calculate word count and token estimate
-            message.calculate_word_count()
-            message.estimate_tokens()
-            
-            if 'metadata' in msg_data:
-                message.set_metadata(msg_data['metadata'])
-            
-            session.add(message)
-        session.flush()  # Ensure all messages are added
-    
-    def get_conversation(self, conversation_id: int) -> Optional[Dict[str, Any]]:
-        """Get a conversation by ID with all its messages"""
-        with self.SessionLocal() as session:
-            conversation = session.query(Conversation).filter_by(id=conversation_id).first()
-            if not conversation:
-                return None
-            
-            # Get messages
-            messages = session.query(Message).filter_by(conversation_id=conversation_id).order_by(Message.message_index).all()
-            
+        # Case 1: list of messages or strings
+        if isinstance(raw, list):
+            messages = []
+            for item in raw:
+                if isinstance(item, dict):
+                    role = item.get("role") or item.get("author_role") or "user"
+                    content = item.get("content") or item.get("text") or item.get("message") or ""
+                else:  # string or unknown
+                    role = "system"
+                    content = str(item)
+                messages.append({"role": role, "content": content})
+
             return {
-                'id': conversation.id,
-                'title': conversation.title,
-                'url': conversation.url,
-                'created_at': conversation.created_at,
-                'updated_at': conversation.updated_at,
-                'message_count': conversation.message_count,
-                'word_count': conversation.word_count,
-                'source': conversation.source,
-                'status': conversation.status,
-                'metadata': conversation.get_metadata(),
-                'tags': conversation.get_tag_ids(),
-                'messages': [
-                    {
-                        'id': msg.id,
-                        'role': msg.role,
-                        'content': msg.content,
-                        'timestamp': msg.timestamp,
-                        'message_index': msg.message_index,
-                        'word_count': msg.word_count,
-                        'token_estimate': msg.token_estimate,
-                        'metadata': msg.get_metadata()
-                    }
-                    for msg in messages
-                ]
+                "id": fallback_id,
+                "title": file_stem,
+                "timestamp": datetime.now().isoformat(),
+                "messages": messages,
             }
-    
-    def get_conversations(self, limit: int = 100, offset: int = 0, 
-                         source: str = None, status: str = None) -> List[Dict[str, Any]]:
-        """Get list of conversations with optional filtering"""
-        with self.SessionLocal() as session:
-            query = session.query(Conversation)
-            
-            if source:
-                query = query.filter_by(source=source)
-            if status:
-                query = query.filter_by(status=status)
-            
-            conversations = query.order_by(Conversation.updated_at.desc()).limit(limit).offset(offset).all()
-            
-            return [
-                {
-                    'id': conv.id,
-                    'title': conv.title,
-                    'url': conv.url,
-                    'created_at': conv.created_at,
-                    'updated_at': conv.updated_at,
-                    'message_count': conv.message_count,
-                    'word_count': conv.word_count,
-                    'source': conv.source,
-                    'status': conv.status,
-                    'metadata': conv.get_metadata(),
-                    'tags': conv.get_tag_ids()
-                }
-                for conv in conversations
-            ]
-    
-    def search_conversations(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Search conversations by title and content (case-insensitive, SQLite-compatible)"""
-        with self.SessionLocal() as session:
-            session.commit()  # Ensure all data is committed before search
-            q = f"%{query.lower()}%"
-            # Search in conversation titles (case-insensitive)
-            title_results = session.query(Conversation).filter(
-                func.lower(Conversation.title).like(q)
-            ).all()
-            # Search in message content (case-insensitive)
-            content_results = session.query(Conversation).join(Message).filter(
-                func.lower(Message.content).like(q)
-            ).distinct().all()
-            # Combine and deduplicate results
-            all_results = list(set(title_results + content_results))
-            # Convert to dictionaries
-            results = []
-            for conv in all_results[:limit]:
-                results.append({
-                    'id': conv.id,
-                    'title': conv.title,
-                    'url': conv.url,
-                    'created_at': conv.created_at,
-                    'updated_at': conv.updated_at,
-                    'message_count': conv.message_count,
-                    'word_count': conv.word_count,
-                    'source': conv.source,
-                    'status': conv.status,
-                    'metadata': conv.get_metadata(),
-                    'tags': conv.get_tag_ids()
-                })
-            return results
-    
-    def delete_conversation(self, conversation_id: int) -> bool:
-        """Delete a conversation and all its data"""
-        with self.SessionLocal() as session:
-            conversation = session.query(Conversation).filter_by(id=conversation_id).first()
-            if not conversation:
-                return False
-            
-            session.delete(conversation)
-            session.commit()
-            return True
-    
-    # Tag Management
-    def create_tag(self, name: str, color: str = '#007bff', description: str = None) -> int:
-        """Create a new tag"""
-        with self.SessionLocal() as session:
-            tag = Tag(name=name, color=color, description=description)
-            session.add(tag)
-            session.flush()
-            tag_id = tag.id
-            session.commit()
-            return tag_id
-    
-    def get_tags(self) -> List[Dict[str, Any]]:
-        """Get all tags"""
-        with self.SessionLocal() as session:
-            tags = session.query(Tag).order_by(Tag.name).all()
-            return [
-                {
-                    'id': tag.id,
-                    'name': tag.name,
-                    'color': tag.color,
-                    'description': tag.description,
-                    'usage_count': tag.usage_count,
-                    'created_at': tag.created_at
-                }
-                for tag in tags
-            ]
-    
-    def add_tag_to_conversation(self, conversation_id: int, tag_id: int) -> bool:
-        """Add a tag to a conversation"""
-        with self.SessionLocal() as session:
-            # Check if both exist
-            conversation = session.query(Conversation).filter_by(id=conversation_id).first()
-            tag = session.query(Tag).filter_by(id=tag_id).first()
-            if not conversation or not tag:
-                return False
-            # Check if relationship already exists
-            existing = session.query(ConversationTag).filter_by(
-                conversation_id=conversation_id, tag_id=tag_id
-            ).first()
-            if not existing:
-                conversation_tag = ConversationTag(
-                    conversation_id=conversation_id,
-                    tag_id=tag_id
-                )
-                session.add(conversation_tag)
-                # Update conversation's tag list
-                tag_ids = conversation.get_tag_ids()
-                if tag_id not in tag_ids:
-                    tag_ids.append(tag_id)
-                    conversation.set_tag_ids(tag_ids)
-                session.commit()
-            return True
-    
-    def remove_tag_from_conversation(self, conversation_id: int, tag_id: int) -> bool:
-        """Remove a tag from a conversation"""
-        with self.SessionLocal() as session:
-            conversation_tag = session.query(ConversationTag).filter_by(
-                conversation_id=conversation_id, tag_id=tag_id
-            ).first()
-            conversation = session.query(Conversation).filter_by(id=conversation_id).first()
-            if conversation_tag:
-                session.delete(conversation_tag)
-                # Update conversation's tag list
-                if conversation:
-                    tag_ids = conversation.get_tag_ids()
-                    if tag_id in tag_ids:
-                        tag_ids.remove(tag_id)
-                        conversation.set_tag_ids(tag_ids)
-                session.commit()
-                return True
-            return False
-    
-    # Analysis Management
-    def save_analysis_result(self, conversation_id: int, analysis_type: str, 
-                           result_data: Dict[str, Any], template_used: str = None,
-                           processing_time: float = None) -> int:
-        """Save an analysis result"""
-        with self.SessionLocal() as session:
-            analysis = AnalysisResult(
-                conversation_id=conversation_id,
-                analysis_type=analysis_type,
-                result_data=json.dumps(result_data),
-                template_used=template_used,
-                processing_time=processing_time
-            )
-            session.add(analysis)
-            session.flush()
-            analysis_id = analysis.id
-            session.commit()
-            return analysis_id
-    
-    def get_analysis_results(self, conversation_id: int) -> List[Dict[str, Any]]:
-        """Get all analysis results for a conversation"""
-        with self.SessionLocal() as session:
-            results = session.query(AnalysisResult).filter_by(
-                conversation_id=conversation_id
-            ).order_by(AnalysisResult.created_at.desc()).all()
-            
-            return [
-                {
-                    'id': result.id,
-                    'analysis_type': result.analysis_type,
-                    'result_data': result.get_result_data(),
-                    'created_at': result.created_at,
-                    'template_used': result.template_used,
-                    'processing_time': result.processing_time
-                }
-                for result in results
-            ]
-    
-    # Template Management
-    def get_templates(self, category: str = None) -> List[Dict[str, Any]]:
-        """Get templates, optionally filtered by category"""
-        with self.SessionLocal() as session:
-            query = session.query(Template)
-            if category:
-                query = query.filter_by(category=category)
-            
-            templates = query.order_by(Template.name).all()
-            return [
-                {
-                    'id': template.id,
-                    'name': template.name,
-                    'description': template.description,
-                    'template_content': template.template_content,
-                    'category': template.category,
-                    'is_default': template.is_default,
-                    'usage_count': template.usage_count,
-                    'created_at': template.created_at,
-                    'updated_at': template.updated_at
-                }
-                for template in templates
-            ]
-    
-    def create_template(self, name: str, template_content: str, description: str = None,
-                       category: str = 'general', is_default: bool = False) -> int:
-        """Create a new template"""
-        with self.SessionLocal() as session:
-            template = Template(
-                name=name,
-                description=description,
-                template_content=template_content,
-                category=category,
-                is_default=is_default
-            )
-            session.add(template)
-            session.flush()
-            template_id = template.id
-            session.commit()
-            return template_id
-    
-    # Settings Management
-    def get_setting(self, key: str, default: str = None) -> str:
-        """Get a setting value"""
-        with self.SessionLocal() as session:
-            setting = session.query(Setting).filter_by(key=key).first()
-            return setting.value if setting else default
-    
-    def set_setting(self, key: str, value: str, description: str = None):
-        """Set a setting value"""
-        with self.SessionLocal() as session:
-            setting = session.query(Setting).filter_by(key=key).first()
-            if setting:
-                setting.value = value
-                setting.updated_at = datetime.now()
-                if description:
-                    setting.description = description
-            else:
-                setting = Setting(key=key, value=value, description=description)
-                session.add(setting)
-            
-            session.commit()
-    
-    # Statistics and Analytics
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get database statistics"""
-        with self.SessionLocal() as session:
-            total_conversations = session.query(Conversation).count()
-            total_messages = session.query(Message).count()
-            total_words = session.query(Conversation).with_entities(
-                func.sum(Conversation.word_count)
-            ).scalar() or 0
-            total_tags = session.query(Tag).count()
-            total_analyses = session.query(AnalysisResult).count()
-            
-            # Recent activity (last 7 days)
-            week_ago = datetime.now() - timedelta(days=7)
-            recent_conversations = session.query(Conversation).filter(
-                Conversation.created_at >= week_ago
-            ).count()
-            
+
+        # Case 2: already in desired format
+        if isinstance(raw, dict) and isinstance(raw.get("messages"), list):
+            return raw
+
+        # Case 3: ChatGPT official export with `mapping`
+        if isinstance(raw, dict) and "mapping" in raw:
+            mapping = raw.get("mapping", {})
+            messages = []
+            for node in mapping.values():
+                msg = node.get("message") if isinstance(node, dict) else None
+                if not msg:
+                    continue
+                author = msg.get("author", {}) if isinstance(msg, dict) else {}
+                role = author.get("role", "unknown")
+                content_dict = msg.get("content", {}) if isinstance(msg, dict) else {}
+                parts = content_dict.get("parts", []) if isinstance(content_dict, dict) else []
+                content = "\n".join(parts) if isinstance(parts, list) else str(parts)
+                messages.append({"role": role, "content": content})
+
             return {
-                'total_conversations': total_conversations,
-                'total_messages': total_messages,
-                'total_words': total_words,
-                'total_tags': total_tags,
-                'total_analyses': total_analyses,
-                'recent_conversations': recent_conversations
+                "id": raw.get("id", fallback_id),
+                "title": raw.get("title", file_stem),
+                "timestamp": raw.get("create_time") or datetime.now().isoformat(),
+                "messages": messages,
             }
+
+        # Fallback: treat as a plain string
+        return {
+            "id": fallback_id,
+            "title": file_stem,
+            "timestamp": datetime.now().isoformat(),
+            "messages": [{"role": "system", "content": str(raw)}],
+        }
     
-    def backup_database(self, backup_path: str = None) -> bool:
-        """Create a backup of the database"""
-        if backup_path is None:
-            backup_dir = Path("data/backups")
-            backup_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = str(backup_dir / f"dreamscape_backup_{timestamp}.db")
+    def ingest_conversations(self, conversations_dir: str = "data/conversations") -> int:
+        """
+        Ingest conversations from JSON files into the memory database.
         
+        Args:
+            conversations_dir: Directory containing conversation JSON files
+            
+        Returns:
+            Number of conversations ingested
+        """
         try:
-            import shutil
-            shutil.copy2(self.db_path, backup_path)
+            conversation_files = glob.glob(f"{conversations_dir}/*.json")
+            logger.info(f"📥 Found {len(conversation_files)} conversation files to ingest")
+            
+            ingested_count = 0
+            
+            for file_path in conversation_files:
+                try:
+                    import json
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        raw_data = json.load(f)
+                    
+                    # Use normalizer to accommodate multiple JSON shapes
+                    convo_data = self._normalize_conversation_json(raw_data, file_path)
+                    
+                    # Extract conversation ID from filename if not in data
+                    if 'id' not in convo_data:
+                        filename = Path(file_path).stem
+                        if '_' in filename:
+                            convo_data['id'] = filename.split('_')[-1]
+                        else:
+                            convo_data['id'] = hashlib.md5(filename.encode()).hexdigest()[:12]
+                    
+                    # Prepare conversation data
+                    conversation = self.content_processor.prepare_conversation_data(convo_data, convo_data['id'])
+                    
+                    # Store conversation
+                    if self.storage.store_conversation(conversation):
+                        # Index the content for search
+                        self.content_processor.index_conversation_content(conversation['id'], conversation)
+                        
+                        # Extract and store prompts
+                        self.prompt_processor.extract_and_store_prompts(conversation['id'], convo_data)
+                        
+                        # Flatten messages to content/word counts if provided
+                        msgs = convo_data.get('messages', [])
+                        convo_data['content'] = "\n".join(msg.get('content', '') for msg in msgs)
+                        convo_data['message_count'] = len(msgs)
+                        convo_data['word_count'] = sum(len(m.get('content', '').split()) for m in msgs)
+                        
+                        ingested_count += 1
+                        logger.info(f"[OK] Ingested: {conversation['title']} (ID: {conversation['id']})")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to ingest {file_path}: {e}")
+                    continue
+            
+            logger.info(f"🎉 Successfully ingested {ingested_count} conversations")
+            return ingested_count
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to ingest conversations: {e}")
+            return 0
+    
+    def store_conversation(self, conversation_data: Dict[str, Any]) -> bool:
+        """
+        Store a conversation in the memory system.
+        
+        Args:
+            conversation_data: Dictionary containing conversation data
+            
+        Returns:
+            True if stored successfully, False otherwise
+        """
+        return self.storage.store_conversation(conversation_data)
+    
+    # Search and retrieval operations
+    def get_context_window(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """Get relevant context for a query."""
+        return self.storage.search_conversations(query, limit)
+    
+    def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get a conversation by ID."""
+        return self.storage.get_conversation_by_id(conversation_id)
+    
+    def get_recent_conversations(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent conversations."""
+        return self.storage.get_recent_conversations(limit)
+    
+    def get_conversations_chronological(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get conversations in chronological order (oldest first).
+        This is important for storyline progression where the earliest
+        conversations should be processed first.
+        
+        Args:
+            limit: Maximum number of conversations
+            
+        Returns:
+            List of conversations in chronological order
+        """
+        return self.storage.get_conversations_chronological(limit)
+    
+    def get_conversation_stats(self) -> Dict[str, Any]:
+        """Get conversation statistics."""
+        return self.storage.get_conversation_stats()
+    
+    # Prompt operations
+    def get_prompts_by_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """Get prompts for a specific conversation."""
+        return self.storage.get_prompts_by_conversation(conversation_id)
+    
+    def search_prompts(self, query: str = None, category: str = None, prompt_type: str = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search prompts with filters."""
+        return self.prompt_processor.search_prompts(query, category, prompt_type, limit)
+    
+    def get_prompt_categories(self) -> List[str]:
+        """Get list of available prompt categories."""
+        return self.prompt_processor.get_prompt_categories()
+    
+    def get_prompt_types(self) -> List[str]:
+        """Get list of available prompt types."""
+        return self.prompt_processor.get_prompt_types()
+    
+    def get_prompt_stats(self) -> Dict[str, Any]:
+        """Get prompt statistics."""
+        return self.prompt_processor.get_prompt_stats()
+    
+    def close(self):
+        """Close the memory manager and database connection."""
+        self.storage.close()
+        # EDIT START release-handle
+        # Ensure the connection handle is released for Windows file deletion.
+        self.conn = None
+        # EDIT END release-handle
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+    
+    def get_conversations_count(self) -> int:
+        """Return the total number of conversations."""
+        return self.storage.get_conversations_count()
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get conversation statistics."""
+        stats = self.get_conversation_stats()
+        stats['total_tags'] = len(self.get_tags())
+        stats['total_templates'] = len(self.get_templates())
+        # Total analyses
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM analysis_results")
+        stats['total_analyses'] = cursor.fetchone()[0]
+        # Recent conversations (last 7 days)
+        cursor.execute("SELECT COUNT(*) FROM conversations WHERE timestamp >= datetime('now', '-7 days')")
+        stats['recent_conversations'] = cursor.fetchone()[0]
+        return stats
+
+    # EDIT START legacy-helpers
+    def _extract_content(self, conversation: Dict[str, Any]) -> str:
+        """Backward-compat extraction used only by legacy unit tests.
+
+        It builds a plain-text representation in this order:
+        1. full_conversation field if present.
+        2. each message in `messages` list.
+        3. each item in `responses` list.
+        Segments are separated by blank lines (\n\n).
+        """
+        parts: list[str] = []
+        if conversation.get("full_conversation"):
+            parts.append(str(conversation["full_conversation"]).strip())
+        # messages
+        for msg in conversation.get("messages", []):
+            parts.append(str(msg.get("content", "")).strip())
+        # responses (older export shape)
+        for resp in conversation.get("responses", []):
+            # Some shapes nest content under 'content', others are raw strings
+            if isinstance(resp, dict):
+                parts.append(str(resp.get("content", "")).strip())
+            else:
+                parts.append(str(resp).strip())
+        return "\n\n".join(filter(None, parts))
+
+    def _chunk_content(self, content: str, chunk_size: int = 50) -> List[str]:
+        """Split content into word-sized chunks for search indexing (legacy tests)."""
+        words = content.split()
+        if not words:
+            return []
+        chunks = [" ".join(words[i : i + chunk_size]) for i in range(0, len(words), chunk_size)]
+        return chunks if chunks else [content]
+    # EDIT END legacy-helpers
+
+# LEGACY ADAPTER ==============================================================
+# A compatibility layer for the former `MemoryNexus` interface used heavily in
+# older tests.  It subclasses `MemoryManager` and implements thin wrappers that
+# delegate to the modern storage/processor methods.  The goal is to keep the
+# legacy tests green while we gradually migrate external callers.
+
+class MemoryNexus(MemoryManager):
+    """Backward-compatibility facade built on top of MemoryManager."""
+
+    # ---------------------------------------------------------------------
+    # Construction helpers
+    # ---------------------------------------------------------------------
+    def __init__(self, db_path: str = "dreamos_memory.db"):
+        super().__init__(db_path)
+        self.conn = self.storage.conn  # Convenience alias
+        self._ensure_legacy_tables()
+
+    def _ensure_legacy_tables(self):
+        """Create legacy tables that are not part of the modern schema."""
+        cursor = self.conn.cursor()
+        cursor.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT,
+                message_index INTEGER,
+                word_count INTEGER,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                color TEXT DEFAULT '#007bff',
+                description TEXT,
+                usage_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS conversation_tags (
+                conversation_id TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (conversation_id, tag_id),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                template_content TEXT NOT NULL,
+                category TEXT DEFAULT 'general',
+                usage_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                description TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                analysis_type TEXT NOT NULL,
+                result_data TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                template_used TEXT,
+                processing_time REAL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+            """
+        )
+        # Insert default artifacts if missing
+        cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value, description) VALUES ('database_version', '1.0', 'Current database schema version')"
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO templates (id, name, description, template_content, category, usage_count) VALUES (1, 'Basic Summary', 'Generate a basic summary', 'Summary: {{ conversation.title }}', 'summary', 0)"
+        )
+        self.conn.commit()
+        # Ensure `source` column exists in conversations
+        try:
+            cursor.execute("ALTER TABLE conversations ADD COLUMN source TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
+    # ---------------------------------------------------------------------
+    # Conversation CRUD -----------------------------------------------------
+    # ---------------------------------------------------------------------
+    def _generate_convo_id(self) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT IFNULL(MAX(CAST(id AS INTEGER)), 0) + 1 FROM conversations")
+        return cursor.fetchone()[0]
+
+    def save_conversation(self, conversation_data: Dict[str, Any]) -> int:
+        """Insert or update a conversation. Returns its integer ID."""
+        # If a conversation with same URL exists, treat as update
+        if conversation_data.get('url'):
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM conversations WHERE url = ?", (conversation_data['url'],))
+            existing = cursor.fetchone()
+            if existing:
+                conversation_data['id'] = existing[0]
+        # Assign new ID if still missing
+        if 'id' not in conversation_data or conversation_data['id'] is None:
+            conversation_data['id'] = self._generate_convo_id()
+        # Flatten messages to content/word counts if provided
+        msgs = conversation_data.get('messages', [])
+        conversation_data['content'] = "\n".join(msg.get('content', '') for msg in msgs)
+        conversation_data['message_count'] = len(msgs)
+        conversation_data['word_count'] = sum(len(m.get('content', '').split()) for m in msgs)
+        self.store_conversation(conversation_data)  # inherited
+        # Persist individual messages
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_data['id'],))
+            for idx, msg in enumerate(msgs):
+                cursor.execute(
+                    """
+                    INSERT INTO messages (conversation_id, role, content, timestamp, message_index, word_count)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conversation_data['id'],
+                        msg.get('role', 'user'),
+                        msg.get('content', ''),
+                        (msg.get('timestamp') or datetime.now()).isoformat(),
+                        idx,
+                        len(msg.get('content', '').split()),
+                    ),
+                )
+            # Update source
+            cursor.execute("UPDATE conversations SET source = ? WHERE id = ?", (conversation_data.get('source', 'chatgpt'), conversation_data['id']))
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to persist messages for conversation {conversation_data['id']}: {e}")
+        return int(conversation_data['id'])
+
+    def get_conversation(self, conversation_id: int) -> Optional[Dict[str, Any]]:
+        convo = self.get_conversation_by_id(conversation_id)
+        if convo is None:
+            return None
+        # Attach messages for legacy callers
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY message_index",
+            (conversation_id,),
+        )
+        convo['messages'] = [dict(row) for row in cursor.fetchall()]
+        # Attach tag IDs (legacy expects raw list of ints)
+        cursor.execute("SELECT tag_id FROM conversation_tags WHERE conversation_id = ?", (conversation_id,))
+        convo['tags'] = [row[0] for row in cursor.fetchall()]
+        return convo
+
+    def get_conversations(self, limit: int = 10, source: str = None) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        query = "SELECT * FROM conversations"
+        params: List[Any] = []
+        if source:
+            query += " WHERE source = ?"
+            params.append(source)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_conversation(self, convo_id: int) -> bool:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM conversations WHERE id = ?", (convo_id,))
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Failed to delete conversation {convo_id}: {e}")
+            return False
+
+    def search_conversations(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        results = self.storage.search_conversations(query, limit=limit)
+        for res in results:
+            try:
+                res['id'] = int(res['id'])
+            except (ValueError, TypeError):
+                pass
+        return results
+
+    # ---------------------------------------------------------------------
+    # Tag management --------------------------------------------------------
+    # ---------------------------------------------------------------------
+    def create_tag(self, name: str, color: str = "#007bff", description: str = "") -> int:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO tags (name, color, description) VALUES (?, ?, ?) ",
+            (name, color, description),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_tags(self) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM tags ORDER BY usage_count DESC, name")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def add_tag_to_conversation(self, conversation_id: int, tag_id: int):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO conversation_tags (conversation_id, tag_id) VALUES (?, ?)",
+                (conversation_id, tag_id),
+            )
+            cursor.execute(
+                "UPDATE tags SET usage_count = usage_count + 1 WHERE id = ?", (tag_id,)
+            )
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to add tag {tag_id} to conversation {conversation_id}: {e}")
+
+    def remove_tag_from_conversation(self, conversation_id: int, tag_id: int):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM conversation_tags WHERE conversation_id = ? AND tag_id = ?",
+            (conversation_id, tag_id),
+        )
+        self.conn.commit()
+
+    # ---------------------------------------------------------------------
+    # Template management ----------------------------------------------------
+    # ---------------------------------------------------------------------
+    def create_template(self, name: str, template_content: str, description: str = "", category: str = "general") -> int:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO templates (name, description, template_content, category)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, description, template_content, category),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_templates(self, category: str = None) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        if category:
+            cursor.execute("SELECT * FROM templates WHERE category = ?", (category,))
+        else:
+            cursor.execute("SELECT * FROM templates")
+        return [dict(row) for row in cursor.fetchall()]
+
+    # ---------------------------------------------------------------------
+    # Settings --------------------------------------------------------------
+    # ---------------------------------------------------------------------
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: Any, description: str = None):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO settings (key, value, description) VALUES (?, ?, ?)",
+            (key, value, description),
+        )
+        self.conn.commit()
+
+    # ---------------------------------------------------------------------
+    # Analysis --------------------------------------------------------------
+    # ---------------------------------------------------------------------
+    def save_analysis_result(self, conversation_id: int, analysis_type: str, result_data: str, template_used: str = None, processing_time: float = None) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO analysis_results (conversation_id, analysis_type, result_data, template_used, processing_time)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (conversation_id, analysis_type, json.dumps(result_data), template_used, processing_time),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_analysis_results(self, conversation_id: int) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM analysis_results WHERE conversation_id = ?", (conversation_id,))
+        results = []
+        for row in cursor.fetchall():
+            data = dict(row)
+            try:
+                data['result_data'] = json.loads(data['result_data'])
+            except Exception:
+                pass
+            results.append(data)
+        return results
+
+    # ---------------------------------------------------------------------
+    # Statistics & utilities --------------------------------------------------
+    # ---------------------------------------------------------------------
+    def backup_database(self, dst_path: str = None) -> bool:
+        try:
+            dst_dir = Path(dst_path).parent if dst_path else Path("data/backups")
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            dst = dst_path or str(dst_dir / f"dreamscape_backup_{int(datetime.now().timestamp())}.db")
+            copy2(self.storage.db_path, dst)
             return True
         except Exception as e:
-            print(f"Backup failed: {e}")
-            return False 
+            logger.error(f"❌ Failed to backup database: {e}")
+            return False
+
+# LEGACY ADAPTER END ==========================================================
+
+def main():
+    """Main function for testing."""
+    with MemoryManager() as mm:
+        # Test ingestion
+        count = mm.ingest_conversations()
+        print(f"Ingested {count} conversations")
+        
+        # Test retrieval
+        conversations = mm.get_recent_conversations(5)
+        print(f"Retrieved {len(conversations)} recent conversations")
+        
+        # Test stats
+        stats = mm.get_conversation_stats()
+        print(f"Stats: {stats}")
+
+if __name__ == "__main__":
+    main() 

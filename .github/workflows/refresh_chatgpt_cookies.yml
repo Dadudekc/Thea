@@ -1,0 +1,38 @@
+name: Refresh ChatGPT Cookies
+
+# Manual trigger only until headless is proven stable
+on:
+  workflow_dispatch:
+
+jobs:
+  refresh-cookies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CHATGPT_USERNAME: ${{ secrets.CHATGPT_USERNAME }}
+      CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD }}
+      CHATGPT_TOTP_SECRET: ${{ secrets.CHATGPT_TOTP_SECRET }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_CHANNEL_AGENT_3: ${{ secrets.DISCORD_CHANNEL_AGENT_3 }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Refresh ChatGPT cookies (headed)
+        run: python scripts/refresh_chatgpt_cookies.py --no-headless
+
+      - name: Upload refreshed cookies artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt_cookies
+          path: data/chatgpt_cookies.pkl 

@@ -1,0 +1,23 @@
+prompts:
+- auto_deploy: true
+  description: Resume agent conversation with context
+  inject_mode: paste_and_wait
+  name: agent_resume
+  prompt_file: templates/prompts/agent_resume.prompt.md
+  target_agent: thea
+- auto_deploy: false
+  description: Code review prompt for Codex agent
+  inject_mode: paste_and_wait
+  name: code_review
+  prompt_file: templates/prompts/codex_validator.prompt.md
+  target_agent: codex
+- auto_deploy: false
+  description: Memory analysis prompt for Memory Agent
+  inject_mode: paste_and_wait
+  name: memory_analysis
+  prompt_file: templates/prompts/memory_summarizer.prompt.md
+  target_agent: memory_agent
+settings:
+  default_wait_time: 2
+  max_retries: 3
+  retry_delay: 1

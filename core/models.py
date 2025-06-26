@@ -10,6 +10,7 @@ from sqlalchemy.sql import func
 import json
 from datetime import datetime
 from typing import List, Dict, Optional, Any
+from dataclasses import dataclass
 
 Base = declarative_base()
 
@@ -228,4 +229,20 @@ def create_database_session(db_path: str):
 def get_db_session(db_path: str):
     """Get a database session"""
     SessionLocal = create_database_session(db_path)
-    return SessionLocal() 
+    return SessionLocal()
+
+# EDIT START – Phase-3 event object
+@dataclass(slots=True)
+class DSUpdate:
+    """Unified event object broadcast by dreamscape/MMORPG subsystems.
+
+    kind:   semantic topic key ("skills", "quests", "story", etc.)
+    msg:    plain-text summary suitable for Discord or logs
+    embed:  optional dict used to build a `discord.Embed` when richer
+            formatting is desired.  Kept generic so transport layers decide
+            whether/how to wrap.
+    """
+    kind: str
+    msg: str
+    embed: Optional[Dict] = None
+# EDIT END 

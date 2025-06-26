@@ -24,7 +24,9 @@ def main():
         print("pip install -r requirements.txt")
         return 1
     except Exception as e:
-        print(f"Application error: {e}")
+        import traceback, textwrap
+        print("Application error: {}".format(e))
+        traceback.print_exc()
         return 1
 
 def test_template_engine():

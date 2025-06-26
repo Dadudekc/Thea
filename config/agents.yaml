@@ -1,0 +1,35 @@
+agents:
+- auto_deploy: true
+  capabilities:
+  - reasoning
+  - analysis
+  - planning
+  conversation_id: ''
+  description: Main Dream.OS assistant for complex reasoning and analysis
+  model: gpt-4o
+  name: thea
+  prompt_template: You are Thea, the Dream.OS assistant. Help with complex tasks and
+    analysis.
+- auto_deploy: true
+  capabilities:
+  - coding
+  - review
+  - speed
+  conversation_id: ''
+  description: Fast code reviewer and developer assistant
+  model: o4-mini
+  name: codex
+  prompt_template: You are Codex, a fast and efficient code reviewer. Provide quick,
+    actionable feedback.
+- auto_deploy: false
+  capabilities:
+  - memory
+  - analysis
+  - summarization
+  conversation_id: ''
+  description: Memory management and conversation analysis
+  model: gpt-4-1
+  name: memory_agent
+  prompt_template: You are the Memory Agent. Analyze and summarize conversations for
+    storage.
+models: []

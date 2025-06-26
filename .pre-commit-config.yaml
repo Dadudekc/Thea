@@ -1,0 +1,10 @@
+{{
+repos:
+  - repo: local
+    hooks:
+      - id: tools-parity
+        name: "Validate Tools DB parity"
+        entry: python scripts/check_tools_parity.py
+        language: system
+        pass_filenames: false
+}} 

@@ -3,32 +3,25 @@ DevLog Content Generator - Transform ChatGPT conversations into engaging develop
 Processes chat history into structured blog posts, technical articles, and social media content.
 """
 
+import sys
 import os
+
+# Add the project root to the path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import json
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from pathlib import Path
-import markdown
-import frontmatter
-from jinja2 import Environment, FileSystemLoader
-from config import settings # Import the existing settings module
 
-from utils.chatgpt_scraper import ChatGPTScraper
-from utils.strategies import TwitterStrategy, LinkedInStrategy
-from utils.logging_utils import get_logger # Import get_logger
+from scrapers.content_processor import ContentProcessor, ContentBlock
+from scrapers.blog_generator import BlogGenerator
+from scrapers.social_content_generator import SocialContentGenerator
 
-# Configure logging using the consolidated utility
-logger = get_logger(__name__) # Use __name__ for module-level logger
-
-@dataclass
-class ContentBlock:
-    """Represents a block of content from the conversation."""
-    type: str  # 'question', 'explanation', 'code', 'error', 'solution'
-    content: str
-    metadata: Dict[str, Any]
-    timestamp: datetime
+logger = logging.getLogger(__name__)
 
 @dataclass
 class DevLogPost:
@@ -54,9 +47,9 @@ class DevLogGenerator:
             strategies: Dictionary of strategies for different platforms
         """
         self.strategies = strategies
-        self.template_dir = "templates"
-        self.env = Environment(loader=FileSystemLoader(self.template_dir))
-        self.scraper = ChatGPTScraper(headless=True)
+        self.content_processor = ContentProcessor()
+        self.blog_generator = BlogGenerator()
+        self.social_generator = SocialContentGenerator()
         logger.info("Initialized DevLog Generator")
 
     def process_conversation(self, chat_data: Dict[str, Any]) -> DevLogPost:
@@ -81,7 +74,7 @@ class DevLogGenerator:
         
         # Process each message
         for msg in messages:
-            block = self._process_message(msg)
+            block = self.content_processor.process_message(msg)
             if block:
                 content_blocks.append(block)
                 
@@ -102,15 +95,15 @@ class DevLogGenerator:
                     key_learnings.append(block.content)
         
         # Generate title and description
-        title = self._generate_title(content_blocks)
-        description = self._generate_description(content_blocks)
+        title = self.blog_generator.generate_title(content_blocks)
+        description = self.blog_generator.generate_description(content_blocks)
         
         # Create DevLogPost
         return DevLogPost(
             title=title,
             description=description,
             date=datetime.now(),
-            tags=self._extract_tags(content_blocks),
+            tags=self.blog_generator.extract_tags(content_blocks),
             content_blocks=content_blocks,
             code_snippets=code_snippets,
             challenges=challenges,
@@ -118,203 +111,31 @@ class DevLogGenerator:
             key_learnings=key_learnings
         )
 
-    def _process_message(self, message: Dict[str, Any]) -> Optional[ContentBlock]:
-        """Process a single message into a content block."""
-        content = message.get("content", "").strip()
-        if not content:
-            return None
-            
-        # Determine message type and metadata
-        metadata = {}
-        msg_type = "explanation"  # default type
-        
-        # Check for code blocks
-        if "```" in content:
-            msg_type = "code"
-            metadata["language"] = self._detect_language(content)
-            
-        # Check for errors/exceptions
-        elif any(err in content.lower() for err in ["error", "exception", "failed"]):
-            msg_type = "error"
-            
-        # Check for solutions
-        elif any(sol in content.lower() for sol in ["solution", "fixed", "resolved"]):
-            msg_type = "solution"
-            
-        # Check for questions
-        elif content.strip().endswith("?"):
-            msg_type = "question"
-            
-        # Extract additional metadata
-        metadata.update(self._extract_metadata(content))
-        
-        return ContentBlock(
-            type=msg_type,
-            content=content,
-            metadata=metadata,
-            timestamp=datetime.fromisoformat(message.get("timestamp", datetime.now().isoformat()))
-        )
-
     def generate_blog_post(self, post: DevLogPost, output_file: str) -> bool:
-        """
-        Generate a blog post in markdown format.
-        
-        Args:
-            post: Structured blog post data
-            output_file: Output markdown file path
-            
-        Returns:
-            bool: True if successful
-        """
-        try:
-            template = self.env.get_template("blog_post.md.j2")
-            content = template.render(post=post)
-            
-            # Add frontmatter
-            post_with_frontmatter = frontmatter.Post(
-                content,
-                title=post.title,
-                date=post.date.strftime("%Y-%m-%d"),
-                tags=post.tags,
-                description=post.description
-            )
-            
-            # Save to file
-            output_path = Path(output_file)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            frontmatter.dump(post_with_frontmatter, output_file)
-            
-            logger.info(f"Generated blog post: {output_file}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to generate blog post: {str(e)}")
-            return False
+        """Generate a blog post in markdown format."""
+        post_data = {
+            'title': post.title,
+            'description': post.description,
+            'date': post.date,
+            'tags': post.tags,
+            'content_blocks': post.content_blocks,
+            'code_snippets': post.code_snippets,
+            'challenges': post.challenges,
+            'solutions': post.solutions,
+            'key_learnings': post.key_learnings
+        }
+        return self.blog_generator.generate_blog_post(post_data, output_file)
 
     def generate_social_content(self, post: DevLogPost, platform: str) -> List[Dict[str, str]]:
-        """
-        Generate social media content from the blog post.
-        
-        Args:
-            post: Structured blog post data
-            platform: Target platform (twitter, linkedin, etc.)
-            
-        Returns:
-            List[Dict[str, str]]: List of social media posts
-        """
-        try:
-            template = self.env.get_template(f"{platform}_post.j2")
-            posts = []
-            
-            # Generate main post
-            main_post = template.render(
-                post=post,
-                title=post.title,
-                description=post.description,
-                key_learnings=post.key_learnings[:3],  # Top 3 learnings
-                tags=post.tags,
-                url=f"https://blog.dream.os/posts/{post.date.strftime('%Y-%m-%d')}-{post.title.lower().replace(' ', '-')}"
-            )
-            posts.append({
-                "type": "main",
-                "content": main_post
-            })
-            
-            # Generate thread for key learnings if more than 3
-            if len(post.key_learnings) > 3:
-                thread_template = self.env.get_template(f"{platform}_thread.j2")
-                thread = thread_template.render(
-                    learnings=post.key_learnings[3:],
-                    tags=post.tags,
-                    total=len(post.key_learnings[3:])
-                )
-                posts.append({
-                    "type": "thread",
-                    "content": thread
-                })
-            
-            return posts
-            
-        except Exception as e:
-            logger.error(f"Failed to generate social content: {str(e)}")
-            return []
-
-    def _generate_title(self, blocks: List[ContentBlock]) -> str:
-        """Generate a title from content blocks."""
-        # Find the first question or main topic
-        for block in blocks:
-            if block.type == "question":
-                return block.content.strip("?")
-        return "Development Log: " + blocks[0].timestamp.strftime("%Y-%m-%d")
-
-    def _generate_description(self, blocks: List[ContentBlock]) -> str:
-        """Generate a description from content blocks."""
-        # Combine key points from explanations
-        explanations = [b.content for b in blocks if b.type == "explanation"][:2]
-        return " ".join(explanations)[:200] + "..."
-
-    def _extract_tags(self, blocks: List[ContentBlock]) -> List[str]:
-        """Extract relevant tags from content."""
-        tags = set()
-        
-        # Common programming languages to detect
-        languages = {
-            "python", "javascript", "typescript", "java", "cpp", "c++", "ruby", 
-            "go", "rust", "php", "swift", "kotlin", "scala", "html", "css"
+        """Generate social media content from the blog post."""
+        post_data = {
+            'title': post.title,
+            'description': post.description,
+            'date': post.date,
+            'tags': post.tags,
+            'key_learnings': post.key_learnings
         }
-        
-        for block in blocks:
-            # Extract from code blocks
-            if block.type == "code":
-                lang = block.metadata.get("language", "").lower()
-                if lang in languages:
-                    tags.add(lang)
-            
-            # Extract from content
-            if block.type in ["explanation", "question"]:
-                # Split content into words and clean them
-                words = block.content.lower().split()
-                for word in words:
-                    # Remove special characters from word
-                    clean_word = ''.join(c for c in word if c.isalnum())
-                    
-                    # Add programming languages
-                    if clean_word in languages:
-                        tags.add(clean_word)
-                    
-                    # Add hashtags (but filter out function parameters)
-                    if word.startswith(("#", "@")) and "(" not in word and ")" not in word:
-                        tag = word.strip("#@")
-                        if tag and not any(c in tag for c in "()=,"):
-                            tags.add(tag)
-        
-        # Add some common categories based on content
-        if any("api" in block.content.lower() for block in blocks):
-            tags.add("api")
-        if any("test" in block.content.lower() for block in blocks):
-            tags.add("testing")
-        if any("error" in block.content.lower() for block in blocks):
-            tags.add("debugging")
-        
-        return sorted(list(tags))
-
-    def _detect_language(self, content: str) -> str:
-        """Detect programming language from code block."""
-        if "```" not in content:
-            return ""
-        
-        # Extract language identifier
-        start = content.find("```") + 3
-        end = content.find("\n", start)
-        if start < end:
-            return content[start:end].strip()
-        return ""
-
-    def _extract_metadata(self, content: str) -> Dict[str, Any]:
-        """Extract additional metadata from content."""
-        metadata = {}
-        # Add metadata extraction logic here
-        return metadata
+        return self.social_generator.generate_social_content(post_data, platform)
 
     def auto_publish(
         self,
@@ -365,35 +186,17 @@ class DevLogGenerator:
             logger.error(f"Failed to auto-publish content: {str(e)}")
             return False
 
-def initialize_strategies():
-    strategies = {}
-    # Use settings from config.settings
-    if settings.TWITTER_CONFIG.get('api_key'): # Check if configured
-        strategies['twitter'] = TwitterStrategy(**settings.TWITTER_CONFIG)
-    if settings.LINKEDIN_CONFIG.get('client_id'): # Check if configured
-        strategies['linkedin'] = LinkedInStrategy(**settings.LINKEDIN_CONFIG)
-    # Add other strategies similarly
-    return strategies
-
 def main():
     """Main entry point for the DevLog Generator."""
     try:
         # Initialize components
-        strategies = initialize_strategies()
-        generator = DevLogGenerator(strategies)
+        generator = DevLogGenerator()
         
-        # Scrape latest conversation
-        chat_data = generator.scraper.scrape_latest()
-        
-        # Auto-publish content
-        if generator.auto_publish(chat_data, dispatcher):
-            logger.info("Successfully published content across platforms")
-        else:
-            logger.error("Failed to publish content")
+        # Example usage
+        logger.info("DevLog Generator ready for use")
             
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
 
 if __name__ == "__main__":
-    # Logging is configured via get_logger at module level
     main() 

@@ -52,6 +52,10 @@ python main.py
 python main.py test          # Run all tests
 python main.py scrape        # Test scraping functionality
 python main.py template      # Test template engine
+
+# List CLI tools stored in the new Tools Database
+# (This does not load the GUI or any heavy modules)
+dreamos tools list
 ```
 
 ## 📁 **Project Structure**
@@ -292,6 +296,28 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - **Contributors**: Join our growing community
 - **Examples**: Share your use cases and examples
 - **Feedback**: Help shape the future of Thea
+
+## 🛠️ Tools Database CLI
+As of Phase&nbsp;3 we ship a lightweight **Tools Database** that stores reusable
+utility scripts inside `data/tools.db`.  You can interact with those tools via
+the Dream.OS Toolbelt without keeping the physical `.py` files around.
+
+| Command | Description |
+|---------|-------------|
+| `dreamos tools list` | Show all available tools |
+| `dreamos tools show <name>` | View a tool's source code pulled from the DB |
+| `dreamos tools run <name> [-- <args>]` | Execute a tool dynamically |
+| `dreamos tools ingest [--force]` | Import / refresh on-disk tools into the DB |
+| `dreamos discord ids [--guild <id>]` | Print your guild and channel IDs for env setup |
+| `dreamos discord set --interactive` | Fill or update the Discord env variables |
+
+Environment variable `TOOLS_DB_PATH` (default `data/tools.db`) controls the
+exact DB location.
+
+> **Heads-up:** Phase 3 introduces a live Discord bot.  Copy `.env.example` → `.env`
+> and fill in `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`,
+> and `DISCORD_CHANNEL_*` variables (see `.env.example`) to enable bot commands through the `dreamos discord …`
+> CLI group.
 
 ---
 

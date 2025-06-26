@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""
+Prompt Deployer - Core functionality for deploying prompts to ChatGPT conversations.
+"""
+
+import os
+import sys
+import yaml
+import logging
+from pathlib import Path
+from typing import Dict, Optional
+from dotenv import load_dotenv
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from core.model_router import ModelRouter, AgentConfig
+from scrapers.chatgpt_scraper import ChatGPTScraper
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class PromptDeployer:
+    """
+    Deploy prompt files to ChatGPT conversations with model-specific routing.
+    """
+    
+    def __init__(self, config_file: str = "config/prompts.yaml"):
+        self.config_file = Path(config_file)
+        self.router = ModelRouter()
+        self.scraper = None
+        self.prompts_config = {}
+        
+        # Load prompt configuration
+        self.load_prompt_config()
+    
+    def load_prompt_config(self):
+        """Load prompt deployment configuration."""
+        if not self.config_file.exists():
+            logger.info(f"Prompt config file {self.config_file} not found, creating default...")
+            self._create_default_prompt_config()
+            return
+        
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                self.prompts_config = yaml.safe_load(f)
+            logger.info(f"Loaded prompt configuration from {self.config_file}")
+        except Exception as e:
+            logger.error(f"Error loading prompt config: {e}")
+            self._create_default_prompt_config()
+    
+    def _create_default_prompt_config(self):
+        """Create default prompt configuration."""
+        default_config = {
+            'prompts': [
+                {
+                    'name': 'agent_resume',
+                    'description': 'Resume agent conversation with context',
+                    'prompt_file': 'templates/prompts/agent_resume.prompt.md',
+                    'target_agent': 'thea',
+                    'inject_mode': 'paste_and_wait',
+                    'auto_deploy': True
+                },
+                {
+                    'name': 'code_review',
+                    'description': 'Code review prompt for Codex agent',
+                    'prompt_file': 'templates/prompts/codex_validator.prompt.md',
+                    'target_agent': 'codex',
+                    'inject_mode': 'paste_and_wait',
+                    'auto_deploy': False
+                },
+                {
+                    'name': 'memory_analysis',
+                    'description': 'Memory analysis prompt for Memory Agent',
+                    'prompt_file': 'templates/prompts/memory_summarizer.prompt.md',
+                    'target_agent': 'memory_agent',
+                    'inject_mode': 'paste_and_wait',
+                    'auto_deploy': False
+                }
+            ],
+            'settings': {
+                'default_wait_time': 2,
+                'max_retries': 3,
+                'retry_delay': 1
+            }
+        }
+        
+        # Ensure config directory exists
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(default_config, f, default_flow_style=False, indent=2)
+        
+        logger.info(f"Created default prompt config at {self.config_file}")
+    
+    def initialize_scraper(self):
+        """Initialize the ChatGPT scraper for deployment."""
+        try:
+            # Get credentials from environment
+            username = os.getenv('CHATGPT_USERNAME')
+            password = os.getenv('CHATGPT_PASSWORD')
+            
+            if not username or not password:
+                logger.error("ChatGPT credentials not found in environment")
+                return False
+            
+            self.scraper = ChatGPTScraper(
+                headless=False,  # Show browser for deployment
+                timeout=30,
+                use_undetected=True,
+                username=username,
+                password=password
+            )
+            
+            if not self.scraper.start_driver():
+                logger.error("Failed to start browser driver")
+                return False
+            
+            if not self.scraper.navigate_to_chatgpt():
+                logger.error("Failed to navigate to ChatGPT")
+                return False
+            
+            if not self.scraper.ensure_login_modern():
+                logger.error("Failed to log into ChatGPT")
+                return False
+            
+            logger.info("✅ Scraper initialized successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing scraper: {e}")
+            return False
+    
+    def deploy_prompt(self, prompt_name: str, target_agent: str = None, conversation_id: str = None) -> bool:
+        """
+        Deploy a prompt to a specific agent or conversation.
+        
+        Args:
+            prompt_name: Name of the prompt to deploy
+            target_agent: Target agent name (optional)
+            conversation_id: Specific conversation ID (optional)
+            
+        Returns:
+            True if deployment successful, False otherwise
+        """
+        if not self.scraper:
+            if not self.initialize_scraper():
+                return False
+        
+        try:
+            # Find the prompt configuration
+            prompt_config = None
+            for prompt in self.prompts_config.get('prompts', []):
+                if prompt['name'] == prompt_name:
+                    prompt_config = prompt
+                    break
+            
+            if not prompt_config:
+                logger.error(f"Prompt '{prompt_name}' not found in configuration")
+                return False
+            
+            # Determine target
+            if target_agent:
+                agent_name = target_agent
+            else:
+                agent_name = prompt_config.get('target_agent')
+            
+            if not agent_name:
+                logger.error("No target agent specified")
+                return False
+            
+            # Get agent URL
+            if conversation_id:
+                # Use specific conversation ID
+                agent = self.router.agents.get(agent_name)
+                if not agent:
+                    logger.error(f"Agent '{agent_name}' not found")
+                    return False
+                url = self.router.get_model_url(conversation_id, agent.model)
+            else:
+                # Use agent's configured conversation
+                url = self.router.get_agent_url(agent_name)
+            
+            if not url:
+                logger.error(f"No conversation URL available for agent '{agent_name}'")
+                return False
+            
+            # Load prompt content
+            prompt_file = Path(prompt_config['prompt_file'])
+            if not prompt_file.exists():
+                logger.error(f"Prompt file not found: {prompt_file}")
+                return False
+            
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                prompt_content = f.read()
+            
+            # Deploy to the agent
+            return self.deploy_to_agent(agent_name, prompt_content)
+            
+        except Exception as e:
+            logger.error(f"Error deploying prompt: {e}")
+            return False
+    
+    def deploy_to_agent(self, agent_name: str, prompt_content: str) -> bool:
+        """Deploy prompt content to a specific agent."""
+        try:
+            # Navigate to agent's conversation
+            agent_url = self.router.get_agent_url(agent_name)
+            if not agent_url:
+                logger.error(f"No URL available for agent '{agent_name}'")
+                return False
+            
+            # Navigate to the conversation
+            if not self.scraper.navigate_to_url(agent_url):
+                logger.error(f"Failed to navigate to {agent_url}")
+                return False
+            
+            # Wait for chat to be ready
+            if not self.scraper.wait_for_chat_ready():
+                logger.error("Chat not ready")
+                return False
+            
+            # Send the prompt
+            if not self.scraper.send_message(prompt_content):
+                logger.error("Failed to send prompt")
+                return False
+            
+            logger.info(f"✅ Successfully deployed prompt to {agent_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deploying to agent: {e}")
+            return False
+    
+    def list_prompts(self) -> list:
+        """List all available prompts."""
+        return [prompt['name'] for prompt in self.prompts_config.get('prompts', [])]
+    
+    def add_prompt(self, name: str, prompt_file: str, target_agent: str, description: str = ""):
+        """Add a new prompt to the configuration."""
+        new_prompt = {
+            'name': name,
+            'description': description,
+            'prompt_file': prompt_file,
+            'target_agent': target_agent,
+            'inject_mode': 'paste_and_wait',
+            'auto_deploy': False
+        }
+        
+        self.prompts_config['prompts'].append(new_prompt)
+        self._save_prompt_config()
+        logger.info(f"Added prompt: {name}")
+    
+    def _save_prompt_config(self):
+        """Save the prompt configuration."""
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(self.prompts_config, f, default_flow_style=False, indent=2)
+    
+    def close(self):
+        """Clean up resources."""
+        if self.scraper:
+            self.scraper.close()
+            logger.info("✅ Scraper closed") 
