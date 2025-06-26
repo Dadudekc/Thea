@@ -47,6 +47,15 @@ class ConversationListManager:
             
         try:
             logger.info("Extracting conversation list (sidebar scroll)…")
+
+            # ------------------------------------------------------------------
+            # Ensure sidebar shows *all time* conversations – ChatGPT sometimes
+            # defaults to a 30-day filter which would cap results at ~30.
+            # We look for a dropdown/button that contains the text "Last" and
+            # then pick the option labelled "All time" if present.
+            # ------------------------------------------------------------------
+            self._ensure_all_time_filter(driver)
+
             conversations: list[dict[str, str]] = []
 
             container = self._locate_scroll_container(driver)
@@ -200,4 +209,48 @@ class ConversationListManager:
                 except Exception:
                     continue
         except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Filter helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_all_time_filter(self, driver):
+        """If a date-range filter is visible (e.g. 'Last 30 days'), switch to 'All time'."""
+        try:
+            # Locate the filter button
+            filter_btn = None
+            for text in ["Last", "Past", "Previous"]:
+                try:
+                    filter_btn = driver.find_element(By.XPATH, f"//button[contains(text(), '{text}')]")
+                    if filter_btn.is_displayed():
+                        break
+                except Exception:
+                    continue
+
+            if not filter_btn:
+                return  # no filter detected → assume already all time
+
+            filter_text = filter_btn.text.strip()
+            if "All time" in filter_text:
+                return  # already correct
+
+            driver.execute_script("arguments[0].click();", filter_btn)
+            time.sleep(0.5)
+
+            # Click the menu item – varies by UI; search for option element or button/div
+            try:
+                option = driver.find_element(By.XPATH, "//div[contains(text(), 'All time')]")
+            except Exception:
+                try:
+                    option = driver.find_element(By.XPATH, "//button[contains(text(), 'All time')]")
+                except Exception:
+                    option = None
+
+            if option:
+                driver.execute_script("arguments[0].click();", option)
+                time.sleep(0.5)
+                logger.info("Switched history filter to 'All time'")
+        except Exception:
+            # Silent failure – non-critical
             pass
