@@ -5,7 +5,11 @@ Handles conversation listing and discovery operations.
 """
 
 import logging
-from typing import List, Dict
+import os
+import json
+from typing import List, Dict, Optional
+from datetime import datetime
+from pathlib import Path
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -30,7 +34,15 @@ class ConversationListManager:
         self.scroll_pause_time = 1.5
         self.burst_scroll_threshold = 3  # Number of attempts with no new conversations before burst
     
-    def get_conversation_list(self, driver, max_conversations: int | None = None) -> List[Dict[str, str]]:
+    def get_conversation_list(
+        self,
+        driver,
+        max_conversations: int | None = None,
+        use_cache: bool = False,
+        cache_file: str = "data/conversation_index.json",
+        skip_before: datetime | None = None,
+        skip_titles: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
         """
         Get list of available conversations with improved scrolling.
         
@@ -44,7 +56,18 @@ class ConversationListManager:
         if not driver:
             logger.warning("No driver provided for conversation list")
             return []
-            
+
+        if use_cache and os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if max_conversations:
+                    cached = cached[:max_conversations]
+                logger.info("Loaded %s conversations from cache", len(cached))
+                return cached
+            except Exception as e:
+                logger.warning("Failed to load cache %s: %s", cache_file, e)
+
         try:
             logger.info("Extracting conversation list (sidebar scroll)…")
             conversations: list[dict[str, str]] = []
@@ -85,6 +108,31 @@ class ConversationListManager:
             # Trim to max_conversations if requested
             if max_conversations is not None:
                 conversations = conversations[:max_conversations]
+
+            # Filter by date/title if requested
+            if skip_before or skip_titles:
+                filtered = []
+                for conv in conversations:
+                    if skip_titles and any(t.lower() in conv.get("title", "").lower() for t in skip_titles):
+                        continue
+                    if skip_before and conv.get("timestamp"):
+                        try:
+                            conv_time = datetime.fromisoformat(conv["timestamp"])
+                            if conv_time < skip_before:
+                                continue
+                        except Exception:
+                            pass
+                    filtered.append(conv)
+                conversations = filtered
+
+            if save_cache := use_cache:
+                try:
+                    Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump(conversations, f, indent=2)
+                    logger.info("Saved conversation index to %s", cache_file)
+                except Exception as e:
+                    logger.warning("Failed to save cache %s: %s", cache_file, e)
 
             logger.info("✅ Extracted %s conversations", len(conversations))
             return conversations

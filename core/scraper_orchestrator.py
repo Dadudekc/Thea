@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from scrapers.conversation_fetcher import ConversationFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,7 @@ class ScraperOrchestrator:
             self.conversation_list_manager = ConversationListManager()
             self.conversation_extractor = ConversationExtractor()
             self.content_processor = ContentProcessor()
+            self.fetcher = ConversationFetcher(self.conversation_extractor)
             
             logger.info("All scraping components initialized successfully")
             
@@ -152,7 +156,14 @@ class ScraperOrchestrator:
             logger.error(f"Login process failed: {e}")
             return ScrapingResult(success=False, error=str(e))
     
-    def extract_conversations(self, max_conversations: Optional[int] = None) -> ScrapingResult:
+    def extract_conversations(
+        self,
+        max_conversations: Optional[int] = None,
+        use_cache: bool = False,
+        cache_file: str = "data/conversation_index.json",
+        skip_before: Optional[datetime] = None,
+        skip_titles: Optional[List[str]] = None,
+    ) -> ScrapingResult:
         """
         Extract list of conversations.
         
@@ -167,7 +178,12 @@ class ScraperOrchestrator:
         
         try:
             conversations = self.conversation_list_manager.get_conversation_list(
-                self.driver, max_conversations=max_conversations
+                self.driver,
+                max_conversations=max_conversations,
+                use_cache=use_cache,
+                cache_file=cache_file,
+                skip_before=skip_before,
+                skip_titles=skip_titles,
             )
             
             # Convert to ConversationData objects
@@ -227,7 +243,40 @@ class ScraperOrchestrator:
         except Exception as e:
             logger.error(f"Failed to extract conversation content: {e}")
             return ScrapingResult(success=False, error=str(e))
-    
+
+    def fetch_conversations_parallel(self, conversation_urls: List[str], workers: int = 4,
+                                     force_download: bool = False) -> ScrapingResult:
+        """Fetch multiple conversations in parallel with retry tracking."""
+        if not self.is_initialized:
+            return ScrapingResult(success=False, error="Browser not initialized")
+
+        results: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self.fetcher.fetch, self.driver, url): url for url in conversation_urls}
+
+            for future in as_completed(futures):
+                url = futures[future]
+                data = future.result()
+                if data:
+                    results.append(data)
+                else:
+                    logger.warning("Failed to fetch %s", url)
+
+        self.fetcher.save_failures()
+        result_obj = ScrapingResult(
+            success=len(results) > 0,
+            data=results,
+            metadata={
+                "total_requested": len(conversation_urls),
+                "successful": len(results),
+                "failed": len(conversation_urls) - len(results),
+            },
+        )
+
+        self._write_summary(result_obj)
+        return result_obj
+
     def extract_multiple_conversations(self, conversation_urls: List[str]) -> ScrapingResult:
         """
         Extract content from multiple conversations.
@@ -238,26 +287,7 @@ class ScraperOrchestrator:
         Returns:
             ScrapingResult with list of conversation contents
         """
-        results = []
-        
-        for i, url in enumerate(conversation_urls):
-            logger.info(f"Extracting conversation {i+1}/{len(conversation_urls)}: {url}")
-            
-            result = self.extract_conversation_content(url)
-            if result.success:
-                results.append(result.data)
-            else:
-                logger.warning(f"Failed to extract conversation {url}: {result.error}")
-        
-        return ScrapingResult(
-            success=len(results) > 0,
-            data=results,
-            metadata={
-                "total_requested": len(conversation_urls),
-                "successful": len(results),
-                "failed": len(conversation_urls) - len(results)
-            }
-        )
+        return self.fetch_conversations_parallel(conversation_urls)
     
     def generate_blog_post(self, conversations: List[ConversationData]) -> ScrapingResult:
         """
@@ -384,6 +414,25 @@ class ScraperOrchestrator:
             "driver_active": self.driver is not None,
             "components_loaded": hasattr(self, 'browser_manager')
         }
+
+    def _write_summary(self, result: ScrapingResult) -> None:
+        """Write a human-readable summary log for a scraping run."""
+        try:
+            Path("outputs").mkdir(parents=True, exist_ok=True)
+            summary_path = Path("outputs/scrape_summary.md")
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(f"# Scrape Summary\n\n")
+                meta = result.metadata or {}
+                f.write(f"Total requested: {meta.get('total_requested')}\n\n")
+                f.write(f"Successful: {meta.get('successful')}\n\n")
+                f.write(f"Failed: {meta.get('failed')}\n\n")
+                if self.fetcher.failures:
+                    f.write("## Failures\n")
+                    for fail in self.fetcher.failures:
+                        f.write(f"- {fail.url} ({fail.last_error})\n")
+            logger.info("Summary written to %s", summary_path)
+        except Exception as e:
+            logger.warning("Failed to write summary log: %s", e)
     
     def close(self):
         """Close the browser and clean up resources."""

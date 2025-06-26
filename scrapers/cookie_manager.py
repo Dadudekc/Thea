@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import os
 import pickle
 import logging
+import time
 from typing import Optional
 from pathlib import Path
 
@@ -125,6 +126,17 @@ class CookieManager:
         """
         cookie_path = filepath or self.cookie_file
         return os.path.exists(cookie_path)
+
+    def cookies_fresh(self, max_age_hours: int = 24) -> bool:
+        """Return True if cookie file exists and is younger than max_age_hours."""
+        cookie_path = self.cookie_file
+        try:
+            if not os.path.exists(cookie_path):
+                return False
+            age_hours = (time.time() - os.path.getmtime(cookie_path)) / 3600
+            return age_hours <= max_age_hours
+        except Exception:
+            return False
     
     def delete_cookies(self, filepath: Optional[str] = None) -> bool:
         """

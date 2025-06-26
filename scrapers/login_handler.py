@@ -404,11 +404,13 @@ class LoginHandler:
         # ------------------------------------------------------------------
 
         # 1️⃣  Inject cookies if we have any
-        if cookie_manager.cookie_file_exists():
+        if cookie_manager.cookie_file_exists() and cookie_manager.cookies_fresh():
             logger.info("[Cookies] Loading saved cookies from %s", cookie_manager.cookie_file)
             cookie_manager.load_cookies(driver)
             logger.debug("[Cookies] %s injected; refreshing page…", driver.current_url)
             driver.refresh()
+        elif cookie_manager.cookie_file_exists():
+            logger.info("[Cookies] Stored cookies appear stale; skipping load")
 
         # 2️⃣  Automated login attempt ------------------------------------------------
         if self.username and self.password:
