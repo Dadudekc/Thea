@@ -41,6 +41,14 @@ class MemoryConversationAPI:
         except Exception as e:
             logger.error(f"❌ Search failed: {e}")
             return []
+
+    def advanced_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Advanced boolean search wrapper."""
+        try:
+            return self.memory.advanced_search_conversations(query, limit)
+        except Exception as e:
+            logger.error(f"❌ Advanced search failed: {e}")
+            return []
     
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """

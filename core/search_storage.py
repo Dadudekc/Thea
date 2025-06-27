@@ -85,4 +85,39 @@ class SearchStorage:
             
         except Exception as e:
             logger.error(f"❌ Failed to store memory index: {e}")
-            return False 
+            return False
+
+    def advanced_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Perform basic boolean search with optional exclusion terms."""
+        try:
+            cursor = self.conn.cursor()
+
+            terms = []
+            params = []
+            for token in query.split():
+                if token.startswith('-'):
+                    like = f"%{token[1:]}%"
+                    terms.append("(title NOT LIKE ? AND content NOT LIKE ? AND tags NOT LIKE ?)")
+                    params.extend([like, like, like])
+                else:
+                    like = f"%{token}%"
+                    terms.append("(title LIKE ? OR content LIKE ? OR tags LIKE ?)")
+                    params.extend([like, like, like])
+
+            where_clause = " AND ".join(terms) if terms else "1"
+            search_sql = f"""
+                SELECT * FROM conversations
+                WHERE {where_clause}
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            cursor.execute(search_sql, params)
+
+            conversations = [dict(row) for row in cursor.fetchall()]
+            return conversations
+
+        except Exception as e:
+            logger.error(f"❌ Failed to run advanced search: {e}")
+            return []

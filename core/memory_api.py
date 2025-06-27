@@ -79,6 +79,10 @@ class MemoryAPI:
     # Conversation operations
     def search_conversations(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         return self._get_conversation_api().search_conversations(query, limit)
+
+    def advanced_search_conversations(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Expose advanced conversation search."""
+        return self._get_conversation_api().advanced_search(query, limit)
     
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         return self._get_conversation_api().get_conversation(conversation_id)
@@ -164,6 +168,11 @@ def search_memory(query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Quick search function."""
     api = get_memory_api()
     return api.search_conversations(query, limit)
+
+def advanced_search_memory(query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Quick advanced search helper."""
+    api = get_memory_api()
+    return api.advanced_search_conversations(query, limit)
 
 def get_context_for_task(task: str, limit: int = 3) -> str:
     """Quick context function."""
