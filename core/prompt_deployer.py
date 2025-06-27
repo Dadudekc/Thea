@@ -17,6 +17,7 @@ sys.path.insert(0, str(project_root))
 
 from core.model_router import ModelRouter, AgentConfig
 from scrapers.chatgpt_scraper import ChatGPTScraper
+from core.memory_manager import MemoryManager
 
 # Load environment variables
 load_dotenv()
@@ -210,34 +211,67 @@ class PromptDeployer:
             return False
     
     def deploy_to_agent(self, agent_name: str, prompt_content: str) -> bool:
-        """Deploy prompt content to a specific agent."""
+        """Deploy prompt to an agent, then archive the resulting conversation."""
         try:
-            # Navigate to agent's conversation
+            # Resolve the target conversation URL for the agent
             agent_url = self.router.get_agent_url(agent_name)
             if not agent_url:
                 logger.error(f"No URL available for agent '{agent_name}'")
                 return False
-            
-            # Navigate to the conversation
-            if not self.scraper.navigate_to_url(agent_url):
-                logger.error(f"Failed to navigate to {agent_url}")
+
+            # Step 1 ─ Navigate / enter conversation
+            if not self.scraper.enter_conversation(agent_url):
+                logger.error(f"Failed to load conversation page for '{agent_name}' -> {agent_url}")
                 return False
-            
-            # Wait for chat to be ready
-            if not self.scraper.wait_for_chat_ready():
-                logger.error("Chat not ready")
+
+            # Step 2 ─ Send the prompt and wait for the model to respond
+            if not self.scraper.send_prompt(prompt_content, wait_for_response=True):
+                logger.error("Prompt send/response cycle failed")
                 return False
-            
-            # Send the prompt
-            if not self.scraper.send_message(prompt_content):
-                logger.error("Failed to send prompt")
-                return False
-            
-            logger.info(f"✅ Successfully deployed prompt to {agent_name}")
+
+            # Step 3 ─ Extract full, updated conversation content
+            convo = self.scraper.get_conversation_content()
+            if not convo or not convo.get("content"):
+                logger.warning("No content extracted after prompt deployment; skipping archive")
+                return True  # prompt delivered, but nothing to archive
+
+            # Step 4 ─ Archive into Dreamscape memory DB
+            try:
+                memory = MemoryManager()
+
+                # Build storage payload expecting MemoryStorage columns
+                from datetime import datetime
+                import hashlib
+
+                # Derive a reproducible ID from the ChatGPT URL when possible
+                url_id_segment = convo.get("url", "").rstrip("/").split("/")[-1]
+                convo_id = url_id_segment or hashlib.md5(convo["content"].encode()).hexdigest()[:12]
+
+                word_count = len(convo["content"].split())
+
+                stored = memory.store_conversation({
+                    "id": convo_id,
+                    "title": convo.get("title", "Untitled"),
+                    "timestamp": convo.get("timestamp") or datetime.utcnow().isoformat(),
+                    "model": convo.get("model", "unknown"),
+                    "content": convo["content"],
+                    "url": convo.get("url", ""),
+                    "message_count": convo.get("message_count", len(convo.get("messages", []))),
+                    "word_count": word_count,
+                })
+
+                if stored:
+                    logger.info(f"📚 Archived conversation '{convo.get('title')}' (ID: {convo_id})")
+                else:
+                    logger.warning("Failed to archive conversation to memory DB")
+            except Exception as arch_err:
+                logger.error(f"Archive error: {arch_err}")
+
+            logger.info(f"✅ Prompt deployed & conversation archived for {agent_name}")
             return True
-            
+
         except Exception as e:
-            logger.error(f"Error deploying to agent: {e}")
+            logger.error(f"Error during prompt deployment to agent '{agent_name}': {e}")
             return False
     
     def list_prompts(self) -> list:

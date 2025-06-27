@@ -9,6 +9,28 @@ import logging
 from pathlib import Path
 from typing import Any
 
+# Restore UTF-8 console encoding on Windows prior to configuring logging
+if sys.platform.startswith("win") and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        # Fallback for older consoles
+        try:
+            os.system("chcp 65001 > nul")
+        except Exception:
+            pass
+
+# EDIT START: ensure root logger streams text as UTF-8 (avoids UnicodeEncodeError on Windows)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+    encoding="utf-8",
+    force=True,
+)
+# EDIT END
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -95,6 +117,29 @@ class TheaMainWindow(QMainWindow):
                 logger.info(f"MMORPG engine test: Player={test_player.name}, Skills count={len(test_skills)}")
             except Exception as e:
                 logger.error(f"MMORPG engine test failed: {e}")
+            
+            # --- OPTIONAL FIRST-RUN INGESTION -----------------------------------
+            try:
+                stats = self.memory_manager.get_conversation_stats()
+                if stats.get("total_conversations", 0) == 0:
+                    conv_dir = Path("data/conversations")
+                    if conv_dir.exists() and any(conv_dir.glob("*.json")):
+                        pd = QProgressDialog(
+                            "Importing conversations (first run)…", None, 0, 0, self
+                        )
+                        pd.setWindowTitle("Initializing Database")
+                        pd.setWindowModality(Qt.WindowModality.ApplicationModal)
+                        pd.setMinimumDuration(0)
+                        pd.show()
+
+                        ingested = self.memory_manager.ingest_conversations_async(
+                            str(conv_dir), max_workers=8
+                        )
+
+                        pd.close()
+                        logger.info(f"First-run ingestion completed – {ingested} conversations added")
+            except Exception as ingest_exc:
+                logger.warning(f"Startup ingestion skipped: {ingest_exc}")
             
             logger.info("All core systems initialized successfully")
             
@@ -307,13 +352,24 @@ class TheaMainWindow(QMainWindow):
             self.show_error(f"Failed to load initial data: {e}")
     
     def refresh_conversations(self):
-        """Refresh the conversations list with pagination."""
+        """Refresh the conversations list with pagination and ingest new files."""
+        # EDIT START – auto-ingest new JSON files dropped into data/conversations/
         try:
-            # Use the new pagination system
+            ingested = 0
+            try:
+                ingested = self.memory_manager.ingest_conversations("data/conversations")
+            except Exception as ingest_err:
+                logger.warning(f"Conversation ingestion skipped/failed during refresh: {ingest_err}")
+
+            # Reload the table view
             self.conversations_panel.load_all_conversations()
-            self.status_bar.showMessage("Conversations refreshed with pagination")
+
+            # User-facing message
+            suffix = f" — {ingested} new file{'s' if ingested != 1 else ''} ingested" if ingested else ""
+            self.status_bar.showMessage(f"Conversations refreshed{suffix}", 5000)
         except Exception as e:
             self.show_error(f"Failed to refresh conversations: {e}")
+        # EDIT END
     
     def process_conversations(self):
         """Process ALL conversations through the dreamscape system in chronological order."""
