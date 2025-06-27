@@ -1,0 +1,41 @@
+{
+  "enabled": false,
+  "bot_token": "",
+  "application_id": "",
+  "guild_id": "",
+  "channel_id": "",
+  "prefix": "/",
+  "auto_connect": false,
+  "channels": {},
+  "features": {
+    "dreamscape_updates": true,
+    "conversation_sync": true,
+    "quest_notifications": true,
+    "memory_sharing": true,
+    "guild_system": true,
+    "trading_system": true
+  },
+  "notifications": {
+    "quest_completions": true,
+    "skill_levels": true,
+    "domain_conquests": true,
+    "system_errors": true,
+    "quiet_hours": {
+      "enabled": false,
+      "start": "22:00",
+      "end": "08:00"
+    }
+  },
+  "performance": {
+    "max_concurrent_commands": 10,
+    "command_timeout": 30,
+    "rate_limit_buffer": 5,
+    "memory_limit_mb": 100
+  },
+  "security": {
+    "token_environment_variable": "DISCORD_BOT_TOKEN",
+    "validate_permissions": true,
+    "log_sensitive_data": false,
+    "input_validation": true
+  }
+}
