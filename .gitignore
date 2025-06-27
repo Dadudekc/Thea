@@ -64,4 +64,5 @@ data/conversations/*.md
 *.db
 *.pkl
 *.png
-*.html
+*.html\ndreamos_memory.db*
+dreamos_memory.db*
