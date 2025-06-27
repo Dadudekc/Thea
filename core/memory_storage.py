@@ -68,6 +68,10 @@ class MemoryStorage:
     def search_conversations(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search conversations by content."""
         return self.search_storage.search_conversations(query, limit)
+
+    def advanced_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Run advanced boolean search across conversations."""
+        return self.search_storage.advanced_search(query, limit)
     
     def get_conversation_stats(self) -> Dict[str, Any]:
         """Get conversation statistics."""

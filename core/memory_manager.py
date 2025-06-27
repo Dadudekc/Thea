@@ -515,6 +515,16 @@ class MemoryNexus(MemoryManager):
                 pass
         return results
 
+    def advanced_search_conversations(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Run advanced boolean search using the storage layer."""
+        results = self.storage.advanced_search(query, limit=limit)
+        for res in results:
+            try:
+                res['id'] = int(res['id'])
+            except (ValueError, TypeError):
+                pass
+        return results
+
     # ---------------------------------------------------------------------
     # Tag management --------------------------------------------------------
     # ---------------------------------------------------------------------
