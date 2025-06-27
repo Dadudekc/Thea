@@ -57,6 +57,7 @@ data/conversations/*.md
 !demo_export.json
 !package.json
 !requirements.json
+!config/discord_config.json
 
 # Build / temp artefacts (added during repo re-org)
 .coverage
