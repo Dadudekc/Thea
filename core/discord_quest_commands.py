@@ -254,6 +254,52 @@ class QuestCommands(commands.Cog):
 
             await ctx.send(embed=embed)
 
+    @commands.command(name='questcreate')
+    @commands.has_guild_permissions(manage_guild=True)
+    async def create_quest_cmd(self, ctx, title: str, quest_type: str, difficulty: int, xp: int, *, description: str = ""):
+        """Admin-only: create a new quest.
+
+        Usage: !questcreate "Title" bug_hunt 3 50 optional description text
+        """
+        from core.mmorpg_models import QuestType, Quest
+        import uuid, datetime
+        try:
+            qtype_enum = QuestType(quest_type)
+        except ValueError:
+            await ctx.send(f"Invalid quest type. Options: {[qt.value for qt in QuestType]}")
+            return
+        quest = Quest(
+            id=str(uuid.uuid4())[:8],
+            title=title,
+            description=description or title,
+            quest_type=qtype_enum,
+            difficulty=int(difficulty),
+            xp_reward=int(xp),
+            skill_rewards={},
+            status="available",
+            created_at=datetime.datetime.now(),
+        )
+        self.flow_manager.engine.add_quest(quest) if hasattr(self.flow_manager, 'engine') else None
+        await ctx.send(f"Quest **{title}** created (ID: {quest.id})")
+
+    @commands.command(name='questedit')
+    @commands.has_guild_permissions(manage_guild=True)
+    async def edit_quest_cmd(self, ctx, quest_id: str, field: str, *, value: str):
+        """Admin-only: edit a quest field. Example: !questedit <id> title "New Title""" 
+        allowed = {"title", "description", "difficulty", "xp_reward"}
+        if field not in allowed:
+            await ctx.send(f"Field must be one of {', '.join(allowed)}")
+            return
+        ok = self.flow_manager.engine.update_quest(quest_id, **{field: (int(value) if field in {"difficulty", "xp_reward"} else value)})
+        await ctx.send("Updated." if ok else "Quest not found / immutable")
+
+    @commands.command(name='questdelete')
+    @commands.has_guild_permissions(manage_guild=True)
+    async def delete_quest_cmd(self, ctx, quest_id: str):
+        """Admin-only: delete a quest."""
+        ok = self.flow_manager.engine.delete_quest(quest_id)
+        await ctx.send("Deleted." if ok else "Quest not found")
+
     def _create_equipment_embed(self, item: 'Equipment') -> discord.Embed:
         """Create an embed for equipment details."""
         color = self.progression.RARITY_COLORS.get(item.rarity, 0x969696)

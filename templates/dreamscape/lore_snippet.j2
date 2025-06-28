@@ -1,2 +1,25 @@
-_Lore Update_
-{{ lore_text }} 
+{# EDIT START - enhanced lore_update v2 #}
+{#
+Variables expected:
+  update_title : str   – (optional) Title of the lore update.
+  lore_text    : str   – Main body of the lore text.
+  author       : str   – (optional) Name of the lore curator or author.
+  timestamp    : str   – (optional) ISO8601 or formatted update time.
+#}
+
+{% set title = update_title if update_title else "Lore Update" %}
+> ## 🗒️ {{ title }}
+
+<details>
+<summary>Read the lore</summary>
+
+{{ lore_text }}
+
+</details>
+
+{% if author or timestamp %}
+---
+{% if author %}- **Author:** {{ author }}{% endif %}
+{% if timestamp %}- **Updated At:** {{ timestamp }}{% endif %}
+{% endif %}
+{# EDIT END #}

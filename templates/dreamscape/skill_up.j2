@@ -1,1 +1,49 @@
-{{ player_name }} has advanced {{ skill_name }} to level {{ new_level }}! 🎉 
+{# EDIT START - enhanced v3 #}
+{#
+Variables expected:
+  player_name    : str  – Name of the player.
+  skill_name     : str  – Name of the skill that leveled up.
+  new_level      : int  – New skill level achieved.
+  old_level      : int  – (optional) Previous skill level.
+  skill_category : str  – (optional) Skill type – e.g., "Combat", "Crafting", "Social".
+  xp_gained      : int  – (optional) XP gained from this level-up.
+  milestone      : bool – (optional) Whether this is a milestone level (5, 10, 25, etc.).
+#}
+
+{% set old_level = old_level or (new_level - 1) %}
+{% set xp_gained = xp_gained or (new_level * 10) %}
+{% set milestone = milestone or (new_level % 5 == 0) %}
+
+{% set category_emojis = {
+  'Combat': '⚔️',
+  'Crafting': '🔨',
+  'Social': '💬',
+  'Magic': '✨',
+  'Stealth': '👤',
+  'Survival': '🌿',
+  'Technology': '⚡',
+  'default': '📈'
+} %}
+{% set emoji = category_emojis.get(skill_category, category_emojis.default) %}
+
+{% if milestone %}
+> ### 🎯 **MILESTONE ACHIEVED!** {{ emoji }}
+> **{{ player_name }}** has reached a significant milestone in **{{ skill_name }}**!
+{% else %}
+> ### 📈 **Skill Advancement** {{ emoji }}
+> **{{ player_name }}** has improved their **{{ skill_name }}** proficiency!
+{% endif %}
+
+- **Skill:** {{ skill_name|title }}
+- **Progress:** Level {{ old_level }} → **Level {{ new_level }}**
+- **XP Gained:** +{{ xp_gained }} experience
+{% if skill_category %}
+- **Category:** {{ skill_category|title }}
+{% endif %}
+
+{% if milestone %}
+🎉 *This milestone unlocks new abilities and opportunities!*
+{% else %}
+💪 *Every level brings you closer to mastery.*
+{% endif %}
+{# EDIT END #}

@@ -64,6 +64,33 @@ class DreamscapeProcessor:
             
             # Update dreamscape memory
             if memory_updates:
+                # ------------------------------------------------------------------
+                # MMORPG Engine integration – ensure quest and XP flow is connected.
+                # ------------------------------------------------------------------
+                try:
+                    from core.mmorpg_engine import MMORPGEngine
+
+                    if not hasattr(self, "_mmorpg"):
+                        self._mmorpg = MMORPGEngine(self.memory_manager.db_path)
+
+                    # Handle newly accepted quests
+                    if memory_updates.get("newly_accepted_quests") or memory_updates.get("new_quests_accepted"):
+                        # We ignore specific titles for now and generate based on full content
+                        quest = self._mmorpg.generate_quest_from_conversation(conversation_id, conversation_content)
+                        if quest:
+                            self._mmorpg.accept_quest(quest.id)
+
+                    # Handle quest completions if provided
+                    for completed_title in memory_updates.get("quest_completions", []):
+                        # naive search by title
+                        for q in self._mmorpg.get_active_quests():
+                            if q.title == completed_title:
+                                self._mmorpg.complete_quest(q.id)
+                                break
+
+                except Exception as mm_exc:
+                    logger.debug(f"MMORPG integration skipped: {mm_exc}")
+
                 self.dreamscape_memory.update_memory_state(
                     conversation_id, 
                     memory_updates, 
@@ -339,6 +366,32 @@ class DreamscapeProcessor:
         """Close database connections."""
         self.dreamscape_memory.close()
         self.memory_manager.close()
+
+    # ------------------------------------------------------------------
+    # Public lightweight helper (used by LiveProcessor) -----------------
+    # ------------------------------------------------------------------
+    def process_single_conversation(self, conversation: Dict[str, Any]) -> Dict[str, Any]:
+        """Public helper used by *LiveProcessor*.
+
+        Parameters
+        ----------
+        conversation : Dict[str, Any]
+            Raw conversation payload as fetched from ChatGPT API (must contain an ``id``).
+
+        Returns
+        -------
+        Dict[str, Any]
+            ``{"success": bool, "data": {...} | None, "error": str | None}``
+        """
+        try:
+            conv_id = conversation.get("id") or "unknown"
+            content = conversation.get("content", "")
+
+            data = self.process_conversation_for_dreamscape(conv_id, content)
+            return {"success": True, "data": data, "error": None}
+        except Exception as exc:
+            logger.error("Failed dreamscape processing for %s: %s", conversation.get("id"), exc)
+            return {"success": False, "data": None, "error": str(exc)}
 
 def main():
     """Test the dreamscape processor."""

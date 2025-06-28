@@ -20,6 +20,8 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from core.discord_manager import DiscordManager
+from core.discord_bridge import DiscordBridge
+from core.models import DSUpdate
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -224,8 +226,30 @@ class DevLogTool:
         
         return output_path
     
-    async def post_to_discord(self, content: str, channel_id: Optional[str] = None) -> bool:
+    def _build_embed(self, post: 'DevLogPost') -> Dict:
+        """Create a Discord embed dict for a devlog post."""
+        snippet = (post.content_blocks[0].content[:140] + "…") if post.content_blocks else ""
+        filename = f"{post.date.strftime('%Y-%m-%d')}-{post.title.lower().replace(' ', '-')}.md"
+        url = f"https://github.com/your-org/your-repo/blob/main/outputs/devlogs/{filename}"
+        return {
+            "title": post.title,
+            "description": snippet,
+            "url": url,
+            "color": 0x3498DB,
+            "timestamp": post.date.isoformat(),
+        }
+    
+    async def post_to_discord(self, content: str, channel_id: Optional[str] = None, embed_data: Optional[Dict] = None) -> bool:
         """Post the devlog update to Discord."""
+        # Fast-path via DiscordBridge if running inside the app
+        if embed_data is not None:
+            try:
+                bridge = DiscordBridge()
+                bridge.handle_sync(DSUpdate(kind="devlog", msg=content, embed=embed_data))
+                return True
+            except Exception as bridge_err:
+                logger.debug(f"DiscordBridge fallback: {bridge_err}")
+
         # Prefer using the Discord bot if available and running
         try:
             if self.discord.config.get("enabled"):
@@ -233,7 +257,10 @@ class DevLogTool:
                 if not self.discord.is_connected:
                     logger.info("[DevLog] Discord bot not connected. Attempting REST fallback...")
                     raise RuntimeError("Bot not connected")
-                await self.discord.send_message(content, channel_id)
+                if embed_data:
+                    await self.discord.send_update("devlog", content, embed_data)
+                else:
+                    await self.discord.send_message(content, channel_id)
                 return True
         except Exception as bot_err:
             logger.warning(f"[DevLog] Bot send failed: {bot_err}. Falling back to REST API.")
@@ -323,10 +350,11 @@ def create(
     
     # Format and post to Discord
     discord_content = tool.format_for_discord(post)
+    embed_data = tool._build_embed(post)
     
     # Run the async post in the event loop
     loop = asyncio.get_event_loop()
-    success = loop.run_until_complete(tool.post_to_discord(discord_content, channel))
+    success = loop.run_until_complete(tool.post_to_discord(discord_content, channel, embed_data))
     
     if success:
         click.echo("Successfully posted to Discord!")

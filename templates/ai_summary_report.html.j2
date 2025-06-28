@@ -1,8 +1,22 @@
+{# EDIT START - enhanced v3 - dynamic Jinja2 template #}
+{#
+Variables expected:
+  site_name           : str          – Site/brand name for header and footer.
+  generated_on        : str          – Timestamp of report generation.
+  year                : str          – Current year for copyright.
+  sections            : list[dict]   – Navigation sections with id and title.
+  summary_cards       : list[dict]   – Summary metrics with key and label.
+  summary             : dict         – Data for summary cards and highlights.
+  workflow_feedback   : str          – Text for workflow feedback section.
+  next_steps          : list[str]    – List of next steps.
+  footer_links        : list[dict]   – (optional) Footer navigation links.
+#}
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>AI Output Log Summary - FreeRideInvestor</title>
+  <title>{{ site_name }} – AI Output Log Summary</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     /* Reset + Fonts */
@@ -86,7 +100,7 @@
       margin-top: 20px;
     }
 
-    .phase-card, .highlight-card, .progress-card, .workflow-card, .next-step-section {
+    .card, .next-step-section {
       background-color: #1f1f1f;
       padding: 20px;
       border-radius: 10px;
@@ -119,117 +133,100 @@
 
 <body>
 
-<header class="header">
-  <div class="container header-container">
-    <h3 class="logo">FreeRideInvestor</h3>
-    <nav class="navigation">
+<header>
+  <div class="header-container">
+    <h3 class="logo">{{ site_name }}</h3>
+    <nav>
       <ul class="nav-list">
-        <li><a href="#introduction">Introduction</a></li>
-        <li><a href="#roadmap">Roadmap</a></li>
-        <li><a href="#highlights">Highlights</a></li>
-        <li><a href="#progress">Progress</a></li>
-        <li><a href="#workflow">Workflow</a></li>
-        <li><a href="#outcome">Outcome</a></li>
-        <li><a href="#next-steps">Next Steps</a></li>
+        {% for sec in sections %}
+        <li><a href="#{{ sec.id }}">{{ sec.title }}</a></li>
+        {% endfor %}
       </ul>
     </nav>
   </div>
 </header>
 
 <div class="container">
-  <section class="hero">
+  <section class="hero" id="introduction">
     <h1>AI Output Log Summary</h1>
     <p>Report generated on {{ generated_on }}</p>
-    <a class="btn" href="#roadmap">View Details</a>
+    <a class="btn" href="#{{ sections[1].id if sections|length > 1 else 'roadmap' }}">View Details</a>
   </section>
 
   <hr />
 
-  <section id="introduction">
-    <h2>Introduction</h2>
-    <p>This report summarizes AI cycle logs and outcomes for the date range: {{ summary.date_range }}.</p>
-  </section>
-
-  <hr />
-
-  <section id="roadmap">
-    <h2>Cycle Results Overview</h2>
+  <section id="{{ sections[1].id if sections|length > 1 else 'roadmap' }}">
+    <h2>{{ sections[1].title if sections|length > 1 else 'Cycle Results Overview' }}</h2>
     <div class="grid">
-      <div class="phase-card">
-        <h3>Total Entries</h3>
-        <p>{{ summary.total_entries }}</p>
+      {% for card in summary_cards %}
+      <div class="card">
+        <h3>{{ card.label }}</h3>
+        <p>{{ summary[card.key] }}</p>
       </div>
-      <div class="phase-card">
-        <h3>Successful</h3>
-        <p>{{ summary.successful }}</p>
-      </div>
-      <div class="phase-card">
-        <h3>Partial</h3>
-        <p>{{ summary.partial }}</p>
-      </div>
-      <div class="phase-card">
-        <h3>Failed</h3>
-        <p>{{ summary.failed }}</p>
-      </div>
+      {% endfor %}
     </div>
   </section>
 
   <hr />
 
-  <section id="highlights">
-    <h2>Key Highlights</h2>
+  <section id="{{ sections[2].id if sections|length > 2 else 'highlights' }}">
+    <h2>{{ sections[2].title if sections|length > 2 else 'Key Highlights' }}</h2>
     <ul>
       <li>Average Response Length: {{ summary.avg_response_length }} characters</li>
-      <li>Most Common Tags:</li>
-      <ul>
-        {% for tag, count in summary.tag_distribution.items() %}
-          <li>{{ tag }} ({{ count }})</li>
-        {% else %}
-          <li>No tags found.</li>
-        {% endfor %}
-      </ul>
+      <li>Most Common Tags:
+        <ul>
+          {% if summary.tag_distribution %}
+            {% for tag, count in summary.tag_distribution.items() %}
+            <li>{{ tag }} ({{ count }})</li>
+            {% endfor %}
+          {% else %}
+            <li>No tags found.</li>
+          {% endif %}
+        </ul>
+      </li>
     </ul>
   </section>
 
   <hr />
 
-  <section id="workflow">
-    <h2>Workflow Feedback</h2>
-    <p>Continuous improvements applied based on reinforcement analysis.</p>
+  <section id="{{ sections[3].id if sections|length > 3 else 'workflow' }}">
+    <h2>{{ sections[3].title if sections|length > 3 else 'Workflow Feedback' }}</h2>
+    <p>{{ workflow_feedback }}</p>
   </section>
 
   <hr />
 
-  <section id="outcome">
-    <h2>Outcome</h2>
-    <p>Cycle complete with {{ summary.successful }} successful outputs. Feedback loops engaged for ongoing optimization.</p>
+  <section id="{{ sections[4].id if sections|length > 4 else 'outcome' }}">
+    <h2>{{ sections[4].title if sections|length > 4 else 'Outcome' }}</h2>
+    <p>{{ summary.successful }} successful outputs. Feedback loops engaged for ongoing optimization.</p>
   </section>
 
   <hr />
 
-  <section id="next-steps">
-    <h2>Next Steps</h2>
+  <section id="{{ sections[5].id if sections|length > 5 else 'next-steps' }}">
+    <h2>{{ sections[5].title if sections|length > 5 else 'Next Steps' }}</h2>
     <ul>
-      <li>Review reinforcement feedback.</li>
-      <li>Auto-tune prompts for underperforming cycles.</li>
-      <li>Prepare next Dreamscape episodes.</li>
+      {% for step in next_steps %}
+      <li>{{ step }}</li>
+      {% endfor %}
     </ul>
   </section>
 </div>
 
 <footer class="footer">
-  <div class="container footer-container">
-    <p>© 2025 FreeRideInvestor. All rights reserved.</p>
+  <div class="footer-container">
+    <p>© {{ year }} {{ site_name }}. All rights reserved.</p>
+    {% if footer_links %}
     <nav class="footer-links">
-      <a href="#introduction">Introduction</a>
-      <a href="#roadmap">Roadmap</a>
-      <a href="#highlights">Highlights</a>
-      <a href="#workflow">Workflow</a>
-      <a href="#outcome">Outcome</a>
-      <a href="#next-steps">Next Steps</a>
+      {% for link in footer_links %}
+      <a href="#{{ link.id }}">{{ link.title }}</a>
+      {% endfor %}
     </nav>
+    {% endif %}
   </div>
 </footer>
 
 </body>
 </html>
+
+{# EDIT END #}

@@ -1,22 +1,55 @@
-You are a devlog generator for Dream.OS. Create a development log entry based on the following conversation or work session:
+{# EDIT START - enhanced devlog v2 #}
+{#
+Variables expected:
+  work_session_content : str    – Raw conversation or work session text.
+  devlog               : dict   – Structured devlog data:
+      title           : str
+      worked_on       : list[str]
+      challenges      : list[str]
+      next_steps      : list[str]
+      key_insights    : list[str]
+      tags            : list[str]
+  author               : str    – (optional) Name of the dev.
+  timestamp            : str    – (optional) ISO8601 or formatted log time.
+#}
 
-## Devlog Format:
-1. **What was worked on**: Main tasks and accomplishments
-2. **Challenges encountered**: What broke or was tricky
-3. **What's next**: Next steps and upcoming work
-4. **Key insights**: Important learnings or breakthroughs
+{% macro render_list(items) -%}
+{% for item in items %}
+- {{ item }}
+{% endfor %}
+{%- endmacro %}
 
-## Writing Style:
-- Natural, conversational tone
-- Use pauses and natural flow
-- Include technical details but keep it accessible
-- End with a motivational insight or quote
+> ## 📝 {{ devlog.title }}
+{% if author %}> **Author:** {{ author }}{% endif %}
+{% if timestamp %}> **Date:** {{ timestamp }}{% endif %}
 
-## Output Structure:
-- **Title**: Descriptive title for the devlog entry
-- **Content**: Main devlog narrative
-- **Tags**: Relevant tags for categorization
-- **Next Steps**: Clear action items
+---
 
-**WORK SESSION TO DOCUMENT:**
-{{ work_session_content }} 
+<details>
+<summary>⚙️ Work Session Details</summary>
+
+{{ work_session_content }}
+
+</details>
+
+---
+
+### 1. What was worked on
+{{ render_list(devlog.worked_on) }}
+
+### 2. Challenges encountered
+{{ render_list(devlog.challenges) }}
+
+### 3. What's next
+{{ render_list(devlog.next_steps) }}
+
+### 4. Key insights
+{{ render_list(devlog.key_insights) }}
+
+---
+
+### 📑 Tags
+{% for tag in devlog.tags %}`{{ tag }}` {% endfor %}
+
+> “Progress, not perfection.”  
+{# EDIT END #}

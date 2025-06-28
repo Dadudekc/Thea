@@ -10,10 +10,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from typing import Dict
+import os
 
 from .settings.general_settings import GeneralSettingsWidget
 from .settings.api_settings import APISettingsWidget
 from .settings.memory_settings import MemorySettingsWidget
+from core.settings_manager import settings_manager
 
 class SettingsPanel(QWidget):
     """Panel for managing application settings."""
@@ -138,8 +140,9 @@ class SettingsPanel(QWidget):
     
     def load_settings(self):
         """Load settings from configuration."""
-        # Load default settings
-        self.settings = {
+        from core.settings_manager import settings_manager
+        # Base defaults
+        defaults = {
             'general': {
                 'auto_save': True,
                 'auto_refresh': True,
@@ -168,7 +171,15 @@ class SettingsPanel(QWidget):
                 'enabled': False
             }
         }
-        
+
+        # Overlay saved flat settings
+        saved_flat = settings_manager.get_all_settings()
+        for cat, opts in defaults.items():
+            for key in opts:
+                if key in saved_flat:
+                    opts[key] = saved_flat[key]
+
+        self.settings = defaults
         self.apply_settings_to_ui()
     
     def apply_settings_to_ui(self):
@@ -180,8 +191,9 @@ class SettingsPanel(QWidget):
         if 'memory' in self.settings:
             self.memory_settings.set_settings(self.settings['memory'])
         if 'discord' in self.settings:
-            self.discord_token.setText(self.settings['discord'].get('token', ''))
-            self.discord_enabled.setChecked(self.settings['discord'].get('enabled', False))
+            token = self.settings['discord'].get('token', '') or os.getenv('DISCORD_BOT_TOKEN', '')
+            self.discord_token.setText(token)
+            self.discord_enabled.setChecked(self.settings['discord'].get('enabled', False) or bool(token))
     
     def save_settings(self):
         """Save current settings."""
@@ -196,6 +208,16 @@ class SettingsPanel(QWidget):
                     'enabled': self.discord_enabled.isChecked()
                 }
             }
+            
+            # Persist general settings via shared settings_manager so they survive restarts
+            from core.settings_manager import settings_manager
+
+            # Flatten keys for persistence
+            flat: dict[str, any] = {}
+            for cat, opts in self.settings.items():
+                flat.update(opts)
+
+            settings_manager.update_settings(flat)
             
             # Emit signal with saved settings
             self.settings_saved.emit(self.settings)

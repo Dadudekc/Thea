@@ -19,6 +19,9 @@ import random
 import string
 from datetime import datetime
 import json
+import dataclasses
+import enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import storage and processor modules
 from .memory_storage import MemoryStorage
@@ -320,6 +323,261 @@ class MemoryManager:
         return chunks if chunks else [content]
     # EDIT END legacy-helpers
 
+    def save_game_state(self, state: Any) -> None:
+        """Persist MMORPG game state as JSON blob under the `settings` table.
+
+        The payload can be a dataclass (will be serialised via `asdict`) or a
+        plain ``dict``.  It is stored under the key ``mmorpg_game_state`` so
+        multiple subsystems can fetch it consistently.
+        """
+        key = "mmorpg_game_state"
+        # Convert dataclass → dict if necessary
+        if dataclasses.is_dataclass(state):
+            from dataclasses import asdict
+            payload = asdict(state)
+        else:
+            payload = state
+        try:
+            import enum, datetime as _dt
+
+            def _json_default(o):
+                if isinstance(o, enum.Enum):
+                    return o.value
+                if isinstance(o, (datetime, _dt.datetime)):
+                    return o.isoformat()
+                return str(o)
+
+            self.set_setting(key, json.dumps(payload, default=_json_default), "Serialized MMORPG engine state")
+        except Exception as exc:
+            logger.warning("⚠️ Failed to save game state: %s", exc)
+
+    def load_game_state(self) -> Optional[Dict[str, Any]]:
+        """Return the previously stored game state dict, or None if missing."""
+        import json, typing
+
+        key = "mmorpg_game_state"
+        raw = self.get_setting(key)
+        if not raw:
+            return None
+        try:
+            return typing.cast(Dict[str, Any], json.loads(raw))
+        except Exception as exc:
+            logger.warning("⚠️ Failed to parse stored game state: %s", exc)
+            return None
+
+    # ---------------------------------------------------------------------
+    # Settings (lightweight accessors shared by MMORPGEngine) --------------
+    # ---------------------------------------------------------------------
+    def get_setting(self, key: str, default: Any = None):
+        """Return a stored setting value or *default* when missing.
+
+        Exposed here (and mirrored in MemoryNexus) so that upstream modules
+        such as ``MMORPGEngine`` can persist small blobs like the serialized
+        game state without importing the heavier legacy adapter.
+        """
+        cursor = self.storage.conn.cursor()
+        try:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+        except sqlite3.OperationalError as err:
+            if "no such table" in str(err):
+                # Bootstrap minimal settings table for fresh DBs used in unit tests
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, description TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+                )
+                self.storage.conn.commit()
+                return default
+            raise
+
+    def set_setting(self, key: str, value: Any, description: str | None = None):
+        """Insert or update a setting row."""
+        cursor = self.storage.conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO settings (key, value, description) VALUES (?, ?, ?)",
+            (key, value, description),
+        )
+        self.storage.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Optimised concurrent ingestion (ported from experimental branch)
+    # ------------------------------------------------------------------
+    def ingest_conversations_async(
+        self,
+        conversations_dir: str = "data/conversations",
+        max_workers: int = 8,
+    ) -> int:
+        """Parse and ingest many conversation JSON files concurrently.
+
+        This method off-loads the expensive *disk IO → JSON → normalise* work
+        onto a thread-pool, then serialises DB writes + indexing to avoid
+        SQLite write-locks.
+        """
+        from pathlib import Path
+        from datetime import datetime
+        import hashlib, json as _json
+
+        files = list(Path(conversations_dir).glob("*.json"))
+        if not files:
+            logger.info("📂 No conversation files found for async ingestion")
+            return 0
+
+        # Pre-fetch existing IDs to skip duplicates quickly
+        existing_ids: set[str] = set()
+        try:
+            cur = self.storage.conn.cursor()
+            cur.execute("SELECT id FROM conversations")
+            existing_ids = {row[0] for row in cur.fetchall()}
+        except Exception as dup_exc:
+            logger.debug("Could not pre-load existing IDs: %s", dup_exc)
+
+        logger.info(
+            "🚀 Async ingestion starting – %s files, max_workers=%s",
+            len(files),
+            max_workers,
+        )
+
+        # Attempt to use orjson if available for speed
+        try:
+            import orjson as _orjson
+
+            def _json_load(b: bytes):
+                return _orjson.loads(b)
+        except ModuleNotFoundError:
+            def _json_load(b: bytes):
+                return _json.loads(b)
+
+        def _load(path: Path):
+            try:
+                raw_bytes = path.read_bytes()
+                raw = _json_load(raw_bytes)
+                convo = self._normalize_conversation_json(raw, str(path))
+                # Skip known duplicates early
+                if convo.get("id") in existing_ids:
+                    return None
+                # Ensure ID
+                if "id" not in convo:
+                    convo["id"] = hashlib.md5(path.stem.encode()).hexdigest()[:12]
+                return (path, convo)
+            except Exception as exc:
+                logger.warning("⚠️ Failed to load %s: %s", path, exc)
+                return None
+
+        # Phase-1: parallel JSON load / normalisation
+        loaded: list[tuple[Path, dict]] = []
+        if max_workers > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for fut in as_completed([pool.submit(_load, p) for p in files]):
+                    res = fut.result()
+                    if res:
+                        loaded.append(res)
+        else:
+            for p in files:
+                res = _load(p)
+                if res:
+                    loaded.append(res)
+
+        # Phase-2: prepare bulk rows + deferred indexing/prompt extraction
+        rows: list[tuple] = []
+        post_tasks: list[tuple[dict, dict]] = []  # (conversation, raw_convo)
+        for path, convo_data in loaded:
+            conversation = self.content_processor.prepare_conversation_data(
+                convo_data, convo_data["id"]
+            )
+            rows.append(
+                (
+                    conversation["id"],
+                    conversation["title"],
+                    conversation["timestamp"],
+                    conversation["captured_at"],
+                    conversation["model"],
+                    conversation["tags"],
+                    conversation.get("summary"),
+                    conversation.get("content"),
+                    conversation.get("url"),
+                    conversation.get("message_count", 0),
+                    conversation.get("word_count", 0),
+                    datetime.now().isoformat(),
+                )
+            )
+            post_tasks.append((conversation, convo_data))
+
+        # Bulk insert
+        inserted = self.storage.conversation_storage.store_conversations_bulk(rows)
+        skipped = len(files) - inserted
+
+        # One outer transaction for index + prompt writes
+        conn = self.storage.conn
+        conn.execute("BEGIN")
+        try:
+            for conversation, raw_convo in post_tasks:
+                self.content_processor.index_conversation_content(conversation["id"], conversation)
+                self.prompt_processor.extract_and_store_prompts(conversation["id"], raw_convo)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            logger.error("❌ Index/prompt transaction rolled back: %s", exc)
+
+        logger.info(
+            "🏁 Async ingestion finished – %s ingested, %s duplicates skipped",
+            inserted,
+            skipped,
+        )
+        return inserted
+
+    # ---------------------------------------------------------------------
+    # Template management (exposed at base level so GUI can use it) --------
+    # ---------------------------------------------------------------------
+    def create_template(self, name: str, template_content: str, description: str = "", category: str = "general") -> int:
+        """Create a new Jinja/markdown template and persist it.
+
+        Returns the new template row ID.
+        """
+        self._ensure_templates_table()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO templates (name, description, template_content, category)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, description, template_content, category),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_templates(self, category: str | None = None) -> List[Dict[str, Any]]:
+        """Return templates, optionally filtered by *category*."""
+        self._ensure_templates_table()
+        cursor = self.conn.cursor()
+        if category:
+            cursor.execute("SELECT * FROM templates WHERE category = ? ORDER BY name", (category,))
+        else:
+            cursor.execute("SELECT * FROM templates ORDER BY name")
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Internal -----------------------------------------------------------------
+    def _ensure_templates_table(self):
+        """Create the `templates` table the first time it is accessed.
+
+        Many unit-test DBs start empty; we lazily bootstrap the schema to avoid
+        import-order headaches.
+        """
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    template_content TEXT NOT NULL,
+                    category TEXT DEFAULT 'general',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        except Exception as exc:
+            logger.debug("Failed to create templates table: %s", exc)
+
 # LEGACY ADAPTER ==============================================================
 # A compatibility layer for the former `MemoryNexus` interface used heavily in
 # older tests.  It subclasses `MemoryManager` and implements thin wrappers that
@@ -336,6 +594,14 @@ class MemoryNexus(MemoryManager):
         super().__init__(db_path)
         self.conn = self.storage.conn  # Convenience alias
         self._ensure_legacy_tables()
+        
+        # EDIT START SessionLocal-compat
+        # Provide a lightweight SessionLocal callable that legacy tests can
+        # invoke to obtain an object exposing ``close()``. Internally this
+        # delegates to ``MemoryNexus.close()`` so the SQLite handle is
+        # released before temp files are deleted on Windows.
+        self.SessionLocal = lambda: self
+        # EDIT END SessionLocal-compat
 
     def _ensure_legacy_tables(self):
         """Create legacy tables that are not part of the modern schema."""
@@ -561,46 +827,6 @@ class MemoryNexus(MemoryManager):
         cursor.execute(
             "DELETE FROM conversation_tags WHERE conversation_id = ? AND tag_id = ?",
             (conversation_id, tag_id),
-        )
-        self.conn.commit()
-
-    # ---------------------------------------------------------------------
-    # Template management ----------------------------------------------------
-    # ---------------------------------------------------------------------
-    def create_template(self, name: str, template_content: str, description: str = "", category: str = "general") -> int:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO templates (name, description, template_content, category)
-            VALUES (?, ?, ?, ?)
-            """,
-            (name, description, template_content, category),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
-    def get_templates(self, category: str = None) -> List[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        if category:
-            cursor.execute("SELECT * FROM templates WHERE category = ?", (category,))
-        else:
-            cursor.execute("SELECT * FROM templates")
-        return [dict(row) for row in cursor.fetchall()]
-
-    # ---------------------------------------------------------------------
-    # Settings --------------------------------------------------------------
-    # ---------------------------------------------------------------------
-    def get_setting(self, key: str, default: Any = None) -> Any:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        return row[0] if row else default
-
-    def set_setting(self, key: str, value: Any, description: str = None):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO settings (key, value, description) VALUES (?, ?, ?)",
-            (key, value, description),
         )
         self.conn.commit()
 

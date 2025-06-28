@@ -56,22 +56,44 @@ except ImportError:
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------------------------------
+# Hard-pinned Chrome driver version
+# -----------------------------------------------------------------------------
+# We occasionally see CI breakage when Google releases a new Chrome build before
+# the matching driver binary is available.  To ensure deterministic builds we
+# fall back to a *pinned* major version (v137) whenever we cannot determine the
+# local Chrome version and UCDRIVER_VERSION_MAIN is not set.
+PINNED_CHROME_MAJOR: int = 137
+
 class BrowserManager:
     """Manages browser setup and configuration for ChatGPT scraping."""
     
-    def __init__(self, headless: bool = False, use_undetected: bool = True):
+    def __init__(self, headless: bool = False, use_undetected: bool = True, driver_version_main: int | None = None):
         """
         Initialize the browser manager.
         
         Args:
             headless: Run browser in headless mode
             use_undetected: Use undetected-chromedriver if available
+            driver_version_main: Explicit Chrome *major* version to pin the driver to
         """
         self.headless = self._get_env_bool('CHATGPT_HEADLESS', headless)
         # Respect explicit request even in non-headless mode so users can bypass login detection.
         self.use_undetected = (
             self._get_env_bool('CHATGPT_USE_UNDETECTED', use_undetected) and UNDETECTED_AVAILABLE
         )
+        # Resolve driver version pinning (None = auto)
+        env_version = os.getenv("CHROME_DRIVER_VERSION_MAIN") or os.getenv("UCDRIVER_VERSION_MAIN")
+        try:
+            env_version_int: int | None = int(env_version) if env_version and env_version.isdigit() else None
+        except Exception:
+            env_version_int = None
+
+        self.driver_version_main: int | None = driver_version_main if driver_version_main is not None else env_version_int
+
+        if self.driver_version_main:
+            logger.info("🔒 Hard-pinning Chrome driver major version to %s", self.driver_version_main)
+
         self.driver = None
         
         if self.use_undetected:
@@ -159,18 +181,27 @@ class BrowserManager:
         # and point uc.Chrome at it; otherwise fall back to autodetect.
         # ------------------------------------------------------------------
         driver = None
+        # Determine desired Chrome major version in priority order:
+        # 1) Explicit constructor arg / CHROME_DRIVER_VERSION_MAIN env.
+        # 2) Legacy UCDRIVER_VERSION_MAIN env var (kept for backward-compat).
+        # 3) Detect local Chrome installation version.
+        # 4) Hard-pinned fallback PINNED_CHROME_MAJOR.
         version_main_env = os.getenv("UCDRIVER_VERSION_MAIN")
 
-        try:
-            # Choose driver version: env override → local detection → None (auto)
-            chosen_version = None
-            if version_main_env:
-                chosen_version = int(version_main_env)
+        chosen_version: int | None = None
+        if self.driver_version_main is not None:
+            chosen_version = self.driver_version_main
+        elif version_main_env and version_main_env.isdigit():
+            chosen_version = int(version_main_env)
+        else:
+            detected = self._detect_local_chrome_major()
+            if detected:
+                chosen_version = detected
             else:
-                detected = self._detect_local_chrome_major()
-                if detected:
-                    chosen_version = detected
+                chosen_version = PINNED_CHROME_MAJOR
 
+        try:
+            # Install or reuse the driver for the chosen version.
             if chosen_version:
                 # ------------------------------------------------------------------
                 # undetected-chromedriver caches binaries by major version.  If a newer
@@ -224,21 +255,36 @@ class BrowserManager:
                 driver_path = None
                 if WEBDRIVER_MANAGER_AVAILABLE:
                     try:
-                        local_major = self._detect_local_chrome_major()
-                        if local_major:
-                            logger.info("Local Chrome major version detected: %s", local_major)
+                        # Respect hard-pinned version first
+                        if self.driver_version_main is not None:
+                            logger.info("Using pinned Chrome driver major version %s", self.driver_version_main)
                             try:
-                                # webdriver_manager ≥4 supports version_main kwarg
-                                driver_path = ChromeDriverManager(version_main=str(local_major)).install()
+                                driver_path = ChromeDriverManager(version_main=str(self.driver_version_main)).install()
                             except TypeError:
-                                # Fallback for older signature – ignore and install latest
-                                logger.debug("webdriver_manager version_main unsupported – fallback to default installer")
-                        if not driver_path:
-                            driver_path = ChromeDriverManager().install()
+                                logger.debug("webdriver_manager version_main unsupported – installing latest for pinned major")
+                                driver_path = ChromeDriverManager().install()
+                        else:
+                            local_major = self._detect_local_chrome_major()
+                            if local_major:
+                                logger.info("Local Chrome major version detected: %s", local_major)
+                                try:
+                                    # webdriver_manager ≥4 supports version_main kwarg
+                                    driver_path = ChromeDriverManager(version_main=str(local_major)).install()
+                                except TypeError:
+                                    # Fallback for older signature – ignore and install latest
+                                    logger.debug("webdriver_manager version_main unsupported – fallback to default installer")
                     except Exception as wm_err:
                         logger.warning("webdriver_manager failed to resolve matching driver: %s – falling back to default", wm_err)
-                        driver_path = ChromeDriverManager().install()
+                        driver_path = None
                 # EDIT END
+                # Ensure we have a driver_path. If still None (e.g. no detection), use pinned version.
+                if not driver_path:
+                    try:
+                        logger.info("Installing pinned Chrome driver major version %s", PINNED_CHROME_MAJOR)
+                        driver_path = ChromeDriverManager(version_main=str(PINNED_CHROME_MAJOR)).install()
+                    except Exception:
+                        # Last resort: latest driver
+                        driver_path = ChromeDriverManager().install()
                 service = ChromeService(executable_path=driver_path)
                 driver = webdriver.Chrome(service=service, options=options)
             else:

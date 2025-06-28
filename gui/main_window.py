@@ -49,7 +49,6 @@ from core.dreamscape_memory import DreamscapeMemory
 from core.discord_manager import DiscordManager
 from core.mmorpg_engine import MMORPGEngine
 from core.dreamscape_processor import DreamscapeProcessor
-from scripts.multi_model_prompt_agent import MultiModelPromptAgent
 from core.prompt_deployer import PromptDeployer
 from core.settings_manager import settings_manager
 from core.live_processor import initialize_live_processor, get_live_processor
@@ -58,7 +57,6 @@ from core.live_processor import initialize_live_processor, get_live_processor
 from .panels.dashboard_panel import DashboardPanel
 from .panels.conversations_panel import ConversationsPanel
 from .panels.templates_panel import TemplatesPanel
-from .panels.multi_model_panel import MultiModelPanel
 from .panels.settings_panel import SettingsPanel
 from gui.panels.analytics_panel import AnalyticsPanel
 from gui.panels.resume_panel import ResumePanel
@@ -66,6 +64,7 @@ from gui.panels.scraper_panel import ScraperPanel
 from gui.panels.task_panel import TaskPanel
 from gui.panels.quest_log_panel import QuestLogPanel
 from gui.panels.export_panel import ExportPanel
+from gui.panels.devlog_panel import DevLogPanel
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +98,6 @@ class TheaMainWindow(QMainWindow):
             self.discord_manager = DiscordManager()
             
             # Initialize other systems
-            self.multi_model_agent = MultiModelPromptAgent()
             self.prompt_deployer = PromptDeployer()
             
             # Initialize live processor
@@ -209,7 +207,6 @@ class TheaMainWindow(QMainWindow):
         nav_items = [
             ("🏠 Dashboard", "dashboard"),
             ("💬 Conversations", "conversations"),
-            ("🧠 Multi-Model Testing", "multi_model"),
             ("📝 Templates", "templates"),
             ("📋 Quest Log", "tasks"),
             ("📄 Resume", "resume"),
@@ -243,7 +240,8 @@ class TheaMainWindow(QMainWindow):
         layout = QVBoxLayout(placeholder)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label = QLabel(f"{title} – Coming Soon")
+        suffix = " – Coming Soon" if "Discord" not in title else ""
+        label = QLabel(f"{title}{suffix}")
         label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
@@ -261,12 +259,10 @@ class TheaMainWindow(QMainWindow):
         # Core implemented panels
         self.dashboard_panel = DashboardPanel()
         self.conversations_panel = ConversationsPanel()
-        self.multi_model_panel = MultiModelPanel()
         self.templates_panel = TemplatesPanel()
 
         _add_panel("dashboard", self.dashboard_panel)
         _add_panel("conversations", self.conversations_panel)
-        _add_panel("multi_model", self.multi_model_panel)
         _add_panel("templates", self.templates_panel)
 
         # Placeholders for not-yet implemented panels
@@ -274,9 +270,12 @@ class TheaMainWindow(QMainWindow):
         self.resume_panel = self._create_placeholder_panel("Resume Builder")
         self.analytics_panel = self._create_placeholder_panel("Analytics")
         self.export_panel = self._create_placeholder_panel("Export")
-        self.discord_panel = self._create_placeholder_panel("Discord / Devlog")
+        self.discord_panel = DevLogPanel()
 
-        _add_panel("tasks", QuestLogPanel(self.mmorpg_engine))
+        # Quest Log – keep reference so we can connect its signals
+        self.quest_log_panel = QuestLogPanel(self.mmorpg_engine)
+        _add_panel("tasks", self.quest_log_panel)
+
         _add_panel("resume", self.resume_panel)
         self.analytics_panel = AnalyticsPanel()
         _add_panel("analytics", self.analytics_panel)
@@ -296,7 +295,7 @@ class TheaMainWindow(QMainWindow):
             "📄 Resume - Coming Soon", 
             "📊 Analytics - Coming Soon",
             "📤 Export - Coming Soon",
-            "📢 Discord/Devlog - Coming Soon"
+            "📢 Discord/Devlog"
         ]
         
         for text in placeholder_texts:
@@ -314,9 +313,10 @@ class TheaMainWindow(QMainWindow):
         self.conversations_panel.process_conversations_requested.connect(self.process_conversations)
         self.conversations_panel.update_statistics_requested.connect(self.update_conversation_statistics)
         self.conversations_panel.conversation_selected.connect(self.on_conversation_selected)
+        self.conversations_panel.import_requested.connect(self.import_new_conversations)
         self.templates_panel.template_saved.connect(self.on_template_saved)
         self.templates_panel.template_deleted.connect(self.on_template_deleted)
-        self.multi_model_panel.test_completed.connect(self.on_test_completed)
+        self.templates_panel.template_selected.connect(self._handle_template_action)
         self.settings_panel.settings_saved.connect(self.on_settings_saved)
         
         # Connect theme changes
@@ -332,6 +332,9 @@ class TheaMainWindow(QMainWindow):
                 ConversationStatsUpdater(self.memory_manager).get_conversation_stats_summary(trend=True)
             )
         )
+        
+        # When quests change (completed/added), refresh dashboard stats
+        self.quest_log_panel.tasks_changed.connect(self.update_dashboard)
         
     def switch_panel(self, panel_name: str):
         """Switch to a different panel using the dynamic index map."""
@@ -352,21 +355,12 @@ class TheaMainWindow(QMainWindow):
             self.show_error(f"Failed to load initial data: {e}")
     
     def refresh_conversations(self):
-        """Refresh the conversations list with pagination and ingest new files."""
-        # EDIT START – auto-ingest new JSON files dropped into data/conversations/
+        """Refresh the conversations list without re-ingesting every file on each launch."""
+        # EDIT START – stop unconditional full-directory ingest on every refresh
         try:
-            ingested = 0
-            try:
-                ingested = self.memory_manager.ingest_conversations("data/conversations")
-            except Exception as ingest_err:
-                logger.warning(f"Conversation ingestion skipped/failed during refresh: {ingest_err}")
-
-            # Reload the table view
+            # Just reload from DB; ingestion is handled during first-run or via manual import.
             self.conversations_panel.load_all_conversations()
-
-            # User-facing message
-            suffix = f" — {ingested} new file{'s' if ingested != 1 else ''} ingested" if ingested else ""
-            self.status_bar.showMessage(f"Conversations refreshed{suffix}", 5000)
+            self.status_bar.showMessage("Conversations refreshed", 5000)
         except Exception as e:
             self.show_error(f"Failed to refresh conversations: {e}")
         # EDIT END
@@ -522,10 +516,52 @@ class TheaMainWindow(QMainWindow):
             self.show_error(f"Failed to process conversations with stats update: {e}")
     
     def load_templates(self):
-        """Load templates from the template engine."""
+        """Load templates from the database and templates/ directory."""
         try:
-            templates = []  # Placeholder - would load from template engine
-            self.templates_panel.load_templates(templates)
+            # --------------------------- DB templates ---------------------------
+            templates = self.memory_manager.get_templates()  # returns list[dict]
+            ui_templates = [
+                {
+                    "id": t.get("id"),
+                    "name": t.get("name"),
+                    "content": t.get("template_content"),
+                    "description": t.get("description"),
+                    "category": t.get("category") or "database",
+                    "source": "database",
+                }
+                for t in templates
+            ]
+
+            # ------------------------- File-system templates -------------------
+            from pathlib import Path
+            templates_dir = Path(__file__).parent.parent / "templates"
+            if templates_dir.exists():
+                for ext in ("*.j2", "*.md"):
+                    for path in templates_dir.rglob(ext):
+                        try:
+                            content = path.read_text(encoding="utf-8")
+                        except Exception:
+                            continue  # Skip unreadable files
+                        rel_path = path.relative_to(templates_dir).as_posix()
+                        name = path.stem
+                        # Skip if a DB template with same name already exists
+                        if any(t["name"] == name for t in ui_templates):
+                            continue
+                        ui_templates.append(
+                            {
+                                "id": rel_path,
+                                "name": name,
+                                "content": content,
+                                "description": f"File template ({rel_path})",
+                                "category": path.parent.name,
+                                "source": "file",
+                            }
+                        )
+
+            # -------------------------------------------------------------------
+            if not ui_templates:
+                self.status_bar.showMessage("No templates found", 5000)
+            self.templates_panel.load_templates(ui_templates)
         except Exception as e:
             self.show_error(f"Failed to load templates: {e}")
     
@@ -558,7 +594,6 @@ class TheaMainWindow(QMainWindow):
     def on_conversation_selected(self, conversation): pass
     def on_template_saved(self, template): self.status_bar.showMessage(f"Template '{template.get('name', 'Unknown')}' saved")
     def on_template_deleted(self, template_name): self.status_bar.showMessage(f"Template '{template_name}' deleted")
-    def on_test_completed(self, result): self.status_bar.showMessage(f"Test completed: {result.get('models_tested', 0)} models tested")
     def on_settings_saved(self, settings): self.status_bar.showMessage("Settings saved successfully")
     
     def apply_styling(self):
@@ -1106,6 +1141,108 @@ class TheaMainWindow(QMainWindow):
                 self.analytics_panel.update_overview(stats)
             except Exception as e:
                 logger.warning(f"Failed to refresh analytics: {e}")
+
+    def import_new_conversations(self):
+        """Ingest new JSONs from data/conversations without blocking the UI."""
+        from threading import Thread
+        import traceback
+
+        def _run_ingest():
+            try:
+                ingested = self.memory_manager.ingest_conversations("data/conversations")
+                self.status_bar.showMessage(f"📥 Imported {ingested} new conversation files", 7000)
+                if ingested:
+                    # Reload table on main thread
+                    self.conversations_panel.load_all_conversations()
+            except Exception as e:
+                logger.error(f"Manual import failed: {e}\n{traceback.format_exc()}")
+                self.show_error(f"Failed to import conversations: {e}")
+
+        Thread(target=_run_ingest, daemon=True).start()
+
+    def _handle_template_action(self, payload: dict):
+        """Handle actions coming from TemplatesPanel (edit or send).
+
+        Enhanced: If OpenAI API key is not configured (or sending method
+        is explicitly set to 'scraper' in settings), fall back to the
+        Selenium-based ChatGPT web-scraper for prompt dispatch. This keeps
+        prior async-API flow intact while enabling the requested
+        webscraper implementation.
+        """
+        if payload.get("action") == "send":
+            templates = payload.get("templates", [])
+            if not templates:
+                return
+
+            # Which channel?  settings.json -> prompt_send_method: "api"|"scraper"
+            send_method = settings_manager.get_setting("prompt_send_method", "api")
+
+            # ------------------------------------------------------------------
+            # 1) Try the OpenAI API path when selected and configured
+            # ------------------------------------------------------------------
+            async def _try_api():
+                from core.chatgpt_api_client import ChatGPTAPIClient
+                async with ChatGPTAPIClient() as client:
+                    if not client.is_configured():
+                        return False
+                    for tmpl in templates:
+                        await client.send_message("new", tmpl["content"])
+                return True
+
+            # ------------------------------------------------------------------
+            # 2) Web-scraper fallback using Selenium
+            # ------------------------------------------------------------------
+            def _run_scraper_blocking():
+                """Blocking helper executed in a worker thread."""
+                from scrapers.chatgpt_scraper import ChatGPTScraper
+                import traceback, logging
+
+                try:
+                    with ChatGPTScraper(headless=False, timeout=30) as scraper:
+                        if not scraper.ensure_login():
+                            logging.error("Scraper login failed")
+                            return False
+                        for tmpl in templates:
+                            if not scraper.send_prompt(tmpl["content"], wait_for_response=True):
+                                logging.warning("Failed to send prompt via scraper for template %s", tmpl.get("name"))
+                    return True
+                except Exception as exc:
+                    logging.error("Scraper exception: %s\n%s", exc, traceback.format_exc())
+                    return False
+
+            # --------------------------------------------------------------
+            # Dispatch according to preference with automatic fallback
+            # --------------------------------------------------------------
+            from threading import Thread
+            import asyncio
+
+            if send_method == "api":
+                # Kick off API attempt; if it fails we chain scraper fallback
+                async def _run_with_fallback():
+                    ok = await _try_api()
+                    if ok:
+                        self.status_bar.showMessage(f"Sent {len(templates)} prompt(s) to ChatGPT via API", 5000)
+                        return
+                    # API path unavailable – revert to scraper
+                    self.status_bar.showMessage("API not configured – using web interface", 3000)
+                    def _thread_target():
+                        if _run_scraper_blocking():
+                            self.status_bar.showMessage(f"Sent {len(templates)} prompt(s) via web interface", 5000)
+                        else:
+                            self.show_error("Failed to send prompts via scraper")
+                    Thread(target=_thread_target, daemon=True).start()
+                asyncio.create_task(_run_with_fallback())
+            else:
+                # Directly use the scraper path (non-blocking via thread)
+                def _thread_target():
+                    if _run_scraper_blocking():
+                        self.status_bar.showMessage(f"Sent {len(templates)} prompt(s) via web interface", 5000)
+                    else:
+                        self.show_error("Failed to send prompts via scraper")
+                Thread(target=_thread_target, daemon=True).start()
+        else:
+            # Editing selection handled internally already
+            pass
 
 def main():
     """Main function to run the application."""

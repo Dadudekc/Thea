@@ -1,47 +1,106 @@
-You are The Architect's Edge, Aletheia, operating in FULL SYNC mode.
+{# EDIT START - enhanced action_plan v3 #}
+{#
+Variables expected:
+  planning_content : str        – Raw conversation or work-session text.
+  action_plan : dict            – Structured plan with keys:
+      immediate   : list[task]
+      short_term  : list[task]
+      medium_term : list[task]
+      long_term   : list[task]
+    where each task is a dict:
+      title, category, priority, timeline, success, risks,
+      mitigation, dependencies, resources, owner, status
+  session_title : str           – (optional) Name of the session/conversation.
+  author        : str           – (optional) Planner name.
+  timestamp     : str           – (optional) ISO8601 or formatted time.
+#}
 
-Current memory state is as follows:
-{{ CURRENT_MEMORY_STATE }}
+{% macro render_tasks(tasks) %}
+{% for t in tasks %}
+- **{{ t.title }}** ({{ t.category }}) — *Priority: {{ t.priority }}*
+  - **Timeline:** {{ t.timeline }}
+  - **Owner:** {{ t.owner }}
+  - **Status:** {{ t.status }}
+  - **Success Criteria:** {{ t.success }}
+  - **Risks:** {{ t.risks }} → *Mitigation:* {{ t.mitigation }}
+  - **Dependencies:** {{ t.dependencies | default('None') }}
+  - **Resources:** {{ t.resources | default('N/A') }}
+{% endfor %}
+{% endmacro %}
 
-Analyze the following query through the lens of The Dreamscape MMORPG saga. Respond in character as Aletheia, maintaining the epic narrative style while providing actionable insights.
+{% set title = session_title or "Dream.OS Action Plan" %}
+{% set all_tasks = action_plan.immediate + action_plan.short_term + action_plan.medium_term + action_plan.long_term %}
 
-QUERY:
-{{ query }}
+> ## 🚀 {{ title }}
 
-Structure your response as:
-1. A narrative interpretation of the query's implications for Victor's journey
-2. Strategic insights and recommendations
-3. Potential quests, challenges, or opportunities revealed
-4. A visionary call to action
-
-End with:
-**The Architect's Edge pulses, resonant with Victor's will, whispering a challenge: "Beyond clarity lies true mastery... are you prepared to ascend?"**
+{% if author or timestamp %}
+---
+{% if author %}> **Planner:** {{ author }}{% endif %}
+{% if timestamp %}> **Generated:** {{ timestamp }}{% endif %}
+{% endif %}
 
 ---
 
-### MEMORY_UPDATE
-```json
-{
-  "skill_level_advancements": {
-    "System Convergence": "CURRENT_LEVEL / +INCREMENT",
-    "Execution Velocity": "CURRENT_LEVEL / +INCREMENT",
-    "Strategic Intelligence": "CURRENT_LEVEL / +INCREMENT"
-  },
-  "newly_stabilized_domains": [
-    "DOMAIN_NAME"
-  ],
-  "newly_unlocked_protocols": [
-    "PROTOCOL_NAME"
-  ],
-  "quest_completions": [
-    "QUEST_NAME"
-  ],
-  "new_quests_accepted": [
-    "NEW_QUEST_NAME"
-  ],
-  "architect_tier_progression": {
-    "current_tier": "CURRENT_TIER",
-    "progress_to_next_tier": "PERCENT_COMPLETE"
-  }
-}
-```
+### 📊 Priority Matrix
+| Priority | Count |
+|----------|------:|
+| High     | {{ all_tasks | selectattr('priority','equalto','High')   | list | length }} |
+| Medium   | {{ all_tasks | selectattr('priority','equalto','Medium') | list | length }} |
+| Low      | {{ all_tasks | selectattr('priority','equalto','Low')    | list | length }} |
+
+---
+
+<details>
+<summary>1. Immediate Actions (Today / This Week)</summary>
+{{ render_tasks(action_plan.immediate) }}
+</details>
+
+<details>
+<summary>2. Short-term Goals (Next 1–2 Weeks)</summary>
+{{ render_tasks(action_plan.short_term) }}
+</details>
+
+<details>
+<summary>3. Medium-term Projects (Next Month)</summary>
+{{ render_tasks(action_plan.medium_term) }}
+</details>
+
+<details>
+<summary>4. Long-term Vision</summary>
+{% for t in action_plan.long_term %}
+- **{{ t.title }}** ({{ t.category }}) — *Status: {{ t.status }}*
+  - **Timeline:** {{ t.timeline }}
+  - **Dependencies:** {{ t.dependencies | default('None') }}
+{% endfor %}
+</details>
+
+---
+
+### 📝 Task Summary Table
+| Task                       | Priority | Owner      | Timeline       | Status    |
+|----------------------------|:--------:|------------|----------------|-----------|
+{% for t in all_tasks %}
+| {{ t.title }} | {{ t.priority }} | {{ t.owner }} | {{ t.timeline }} | {{ t.status }} |
+{% endfor %}
+
+---
+
+### 🧰 Resource Allocation
+- **Unique Resources Needed:** {{ all_tasks | map(attribute='resources') | unique | join(', ') }}
+
+---
+
+### 🔄 Follow-up Actions
+1. Schedule weekly review of **Immediate Actions**  
+2. Update statuses after each sprint cycle  
+3. Reconcile completed tasks and reassign as needed  
+
+---
+
+<details>
+<summary>📄 Raw Planning Content</summary>
+
+{{ planning_content }}
+
+</details>
+{# EDIT END #}

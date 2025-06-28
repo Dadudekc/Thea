@@ -256,4 +256,37 @@ class ConversationStorage:
             return result[0] if result else 0
         except Exception as e:
             logger.error(f"Failed to count conversations: {e}")
+            return 0
+    
+    def store_conversations_bulk(self, rows: List[tuple]) -> int:
+        """Insert many conversations in one executemany call.
+
+        Parameters
+        ----------
+        rows : list[tuple]
+            Each tuple must match the column order used in
+            :py:meth:`store_conversation`.
+
+        Returns
+        -------
+        int
+            Number of rows inserted.
+        """
+        if not rows:
+            return 0
+        try:
+            cursor = self.conn.cursor()
+            cursor.executemany(
+                """
+                INSERT OR REPLACE INTO conversations
+                (id, title, timestamp, captured_at, model, tags, summary, content, url,
+                 message_count, word_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            self.conn.commit()
+            return cursor.rowcount or len(rows)
+        except Exception as exc:
+            logger.error("❌ Bulk insert failed: %s", exc)
             return 0 

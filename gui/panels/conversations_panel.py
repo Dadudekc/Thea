@@ -12,6 +12,21 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from typing import List, Dict
 
+# Helper item so the "Messages" column sorts numerically
+class NumericItem(QTableWidgetItem):
+    def __init__(self, value: int):
+        super().__init__(str(value))
+        self._value = value
+
+    def __lt__(self, other: "QTableWidgetItem") -> bool:  # type: ignore[override]
+        if isinstance(other, NumericItem):
+            return self._value < other._value
+        # Fallback to default behavior for non-numeric items
+        try:
+            return float(self.text()) < float(other.text())
+        except Exception:
+            return super().__lt__(other)
+
 class ConversationsPanel(QWidget):
     """Panel for managing and viewing conversations."""
     
@@ -20,6 +35,7 @@ class ConversationsPanel(QWidget):
     refresh_requested = pyqtSignal()
     process_conversations_requested = pyqtSignal()
     update_statistics_requested = pyqtSignal()
+    import_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -74,7 +90,7 @@ class ConversationsPanel(QWidget):
         # Add page size selector
         pagination_layout.addWidget(QLabel("Page Size:"))
         self.page_size_combo = QComboBox()
-        self.page_size_combo.addItems(["50", "100", "200", "500"])
+        self.page_size_combo.addItems(["50", "100", "200", "500", "All"])
         self.page_size_combo.setCurrentText("100")
         self.page_size_combo.currentTextChanged.connect(self.on_page_size_changed)
         pagination_layout.addWidget(self.page_size_combo)
@@ -126,6 +142,24 @@ class ConversationsPanel(QWidget):
         """)
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
         header_layout.addWidget(self.refresh_btn)
+        
+        # Import button – triggers ingest of new JSON files
+        self.import_btn = QPushButton("📥 Import New Files")
+        self.import_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffc107;
+                color: black;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: #e0a800; }
+            QPushButton:pressed { background-color: #d39e00; }
+        """)
+        self.import_btn.clicked.connect(self.import_requested.emit)
+        header_layout.addWidget(self.import_btn)
         
         # Process conversations button
         self.process_btn = QPushButton("🌌 Process Dreamscape")
@@ -194,8 +228,10 @@ class ConversationsPanel(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         
+        # Allow user to sort columns (numeric sort handled via NumericItem for message count)
+        self.conversations_table.setSortingEnabled(True)
+        
         self.conversations_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.conversations_table.setAlternatingRowColors(True)
         self.conversations_table.itemSelectionChanged.connect(self.on_conversation_selected)
         
         list_layout.addWidget(self.conversations_table)
@@ -258,8 +294,8 @@ class ConversationsPanel(QWidget):
             self.conversations_table.setItem(row, 1, source_item)
             
             # Message count
-            message_count = conversation.get('message_count', 0)
-            message_item = QTableWidgetItem(str(message_count))
+            message_count = int(conversation.get('message_count', 0))
+            message_item = NumericItem(message_count)
             self.conversations_table.setItem(row, 2, message_item)
             
             # Date
@@ -348,9 +384,18 @@ class ConversationsPanel(QWidget):
             self.load_current_page()
     
     def on_page_size_changed(self, new_size: str):
-        """Handle page size change."""
-        self.page_size = int(new_size)
-        self.current_page = 1  # Reset to first page
+        """Handle page size change from the combo box."""
+        # Special sentinel: "All" -> 0 means unlimited (fetch all rows)
+        if new_size.lower() == "all":
+            self.page_size = 0
+        else:
+            try:
+                self.page_size = int(new_size)
+            except ValueError:
+                # Fallback to default 100 if parsing fails
+                self.page_size = 100
+
+        self.current_page = 1  # Reset to first page whenever size changes
         self.calculate_total_pages()
         self.load_current_page()
     
@@ -376,13 +421,16 @@ class ConversationsPanel(QWidget):
     def load_current_page(self):
         """Load the current page of conversations."""
         try:
-            # Calculate offset
-            offset = (self.current_page - 1) * self.page_size
-            
-            # Get conversations for current page
             from core.memory_api import get_memory_api
             api = get_memory_api()
-            conversations = api.get_conversations_chronological(limit=self.page_size, offset=offset)
+
+            if self.page_size == 0:
+                # "All" – fetch every conversation
+                conversations = api.get_conversations_chronological(limit=None, offset=0)
+                offset = 0
+            else:
+                offset = (self.current_page - 1) * self.page_size
+                conversations = api.get_conversations_chronological(limit=self.page_size, offset=offset)
             
             # Update table
             self.update_conversations_table(conversations)
@@ -391,9 +439,13 @@ class ConversationsPanel(QWidget):
             self.update_pagination_controls()
             
             # Update status
-            start_item = offset + 1
-            end_item = min(offset + self.page_size, self.total_conversations)
-            self.status_label.setText(f"Showing conversations {start_item}-{end_item} of {self.total_conversations}")
+            if self.page_size == 0:
+                self.status_label.setText(f"Showing all {self.total_conversations} conversations")
+            else:
+                start_item = offset + 1
+                end_item = min(offset + self.page_size, self.total_conversations)
+                self.status_label.setText(
+                    f"Showing conversations {start_item}-{end_item} of {self.total_conversations}")
             
         except Exception as e:
             self.status_label.setText(f"Error loading page: {e}")

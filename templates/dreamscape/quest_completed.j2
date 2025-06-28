@@ -1,1 +1,45 @@
-Quest Completed: {{ quest_title }} (+{{ xp_reward }} XP) 🗡️ 
+{# EDIT START - enhanced quest_completion v2 #}
+{#
+Variables expected:
+  player_name      : str        – (optional) Name of the player.
+  quest_title      : str        – Title of the completed quest.
+  xp_reward        : int        – XP amount awarded.
+  quest_description: str        – (optional) Brief description of the quest.
+  rewards          : list       – (optional) List of additional rewards (e.g., items, gold).
+  timestamp        : str        – (optional) ISO8601 or formatted completion time.
+#}
+
+{% set xp_tiers = [
+  (0, 50,    {'emoji': '🗡️', 'label': 'Novice'}),
+  (51, 150,  {'emoji': '🛡️', 'label': 'Adept'}),
+  (151, 300, {'emoji': '🏹', 'label': 'Veteran'}),
+  (301, 999, {'emoji': '🏆', 'label': 'Heroic'}),
+] %}
+{% set tier_data = xp_tiers | selectattr('0', 'le', xp_reward)
+                              | selectattr('1', 'ge', xp_reward)
+                              | map(attribute='2') | first or {'emoji':'✨','label':'Legend'} %}
+{% set emoji = tier_data.emoji %}
+{% set tier_label = tier_data.label %}
+
+> ### ✅ Quest Completed! {{ emoji }}
+> {% if player_name %}**{{ player_name }}**, you{% else %}You{% endif %} have conquered **{{ quest_title|title }}**!
+> - **XP Reward:** +{{ xp_reward }} XP ({{ tier_label }})
+{% if quest_description %}
+> - **Quest:** {{ quest_description }}
+{% endif %}
+{% if rewards %}
+<details>
+<summary>🎁 Additional Rewards</summary>
+
+{% for reward in rewards %}
+- {{ reward }}
+{% endfor %}
+
+</details>
+{% endif %}
+{% if timestamp %}
+>
+> _Completed at {{ timestamp }}_
+{% endif %}
+
+{# EDIT END #}

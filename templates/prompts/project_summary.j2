@@ -1,21 +1,95 @@
-You are a project analyst for Dream.OS. Create a comprehensive project summary based on the following conversation or work session:
+Task: Create a dynamic Jinja template for Dream.OS project summary entries with full metadata, loops, and structured sections
+Actions Taken:
 
-## Summary Components:
-1. **Project Overview**: What is being built or worked on
-2. **Current Status**: Where the project stands
-3. **Key Achievements**: Major milestones or accomplishments
-4. **Technical Stack**: Technologies, frameworks, tools used
-5. **Challenges**: Obstacles encountered and solutions
-6. **Next Phase**: Upcoming work and priorities
+* Defined `project` dict with keys: `title`, `overview`, `status`, `achievements`, `tech_stack`, `challenges`, `next_phase`, `progress_metrics`, `risk_assessment`, `recommendations`, `tags`
+* Added optional `author` and `timestamp` variables
+* Created `render_list` macro for list-based sections and a `render_metrics` macro for key–value metrics
+* Wrapped `project_content` in collapsible details for context
+  Commit Message: feat(templates): dynamic project-summary template v2
+  Status: ✅ closure
 
-## Output Format:
-- **Project Title**: Clear project name
-- **Executive Summary**: High-level overview (2-3 sentences)
-- **Detailed Summary**: Comprehensive project description
-- **Technical Details**: Architecture, tools, implementation notes
-- **Progress Metrics**: Quantifiable progress indicators
-- **Risk Assessment**: Potential issues or concerns
-- **Recommendations**: Suggested next steps or improvements
+📜 COPY
 
-**PROJECT CONTENT TO SUMMARIZE:**
-{{ project_content }} 
+```jinja
+{# EDIT START - enhanced project_summary v2 #}
+{#
+Variables expected:
+  project_content : str    – Raw conversation or work session text.
+  project         : dict   – Structured project data:
+      title            : str
+      overview         : str
+      status           : str
+      achievements     : list[str]
+      tech_stack       : list[str]
+      challenges       : list[str]
+      next_phase       : list[str]
+      progress_metrics : dict[str, str]   – e.g., {"Completed Tasks": "12/20", "Coverage": "85%"}
+      risk_assessment  : list[str]
+      recommendations  : list[str]
+      tags             : list[str]
+  author          : str    – (optional) Name of the analyst.
+  timestamp       : str    – (optional) ISO8601 or formatted summary time.
+#}
+
+{% macro render_list(items) -%}
+{% for item in items %}
+- {{ item }}
+{% endfor %}
+{%- endmacro %}
+
+{% macro render_metrics(metrics) -%}
+| Metric             | Value        |
+|--------------------|-------------:|
+{% for k, v in metrics.items() -%}
+| {{ k }} | {{ v }} |
+{% endfor %}
+{%- endmacro %}
+
+> ## 🗂️ {{ project.title }}
+{% if author %}> **Analyst:** {{ author }}{% endif %}
+{% if timestamp %}> **Date:** {{ timestamp }}{% endif %}
+
+---
+
+<details>
+<summary>📄 Source Content</summary>
+
+{{ project_content }}
+
+</details>
+
+---
+
+### 1. Project Overview
+{{ project.overview }}
+
+### 2. Current Status
+{{ project.status }}
+
+### 3. Key Achievements
+{{ render_list(project.achievements) }}
+
+### 4. Technical Stack
+{{ render_list(project.tech_stack) }}
+
+### 5. Challenges & Solutions
+{{ render_list(project.challenges) }}
+
+### 6. Next Phase Priorities
+{{ render_list(project.next_phase) }}
+
+### 7. Progress Metrics
+{{ render_metrics(project.progress_metrics) }}
+
+### 8. Risk Assessment
+{{ render_list(project.risk_assessment) }}
+
+### 9. Recommendations
+{{ render_list(project.recommendations) }}
+
+---
+
+### 🏷️ Tags
+{% for tag in project.tags %}`{{ tag }}` {% endfor %}
+{# EDIT END #}
+```

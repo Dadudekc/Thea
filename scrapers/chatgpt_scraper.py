@@ -325,11 +325,22 @@ def main():
     parser.add_argument("--model", default="", help="Specific model to scrape")
     parser.add_argument("--output", default="chatgpt_chats.json", help="Output file")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout for operations")
+    parser.add_argument("--username", help="ChatGPT username/email")
+    parser.add_argument("--password", help="ChatGPT password")
+    parser.add_argument("--cookie-file", help="Path to cookie file for session persistence")
+    parser.add_argument("--totp-secret", help="TOTP secret for 2FA")
     
     args = parser.parse_args()
     
-    # Run scraper
-    with ChatGPTScraper(headless=args.headless, timeout=args.timeout) as scraper:
+    # Run scraper with credentials if provided
+    with ChatGPTScraper(
+        headless=args.headless, 
+        timeout=args.timeout,
+        username=args.username,
+        password=args.password,
+        cookie_file=args.cookie_file,
+        totp_secret=args.totp_secret
+    ) as scraper:
         success = scraper.run_scraper(model=args.model, output_file=args.output)
         
         if success:

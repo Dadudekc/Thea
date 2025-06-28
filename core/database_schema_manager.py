@@ -93,7 +93,8 @@ class DatabaseSchemaManager:
             SQLite connection object
         """
         try:
-            conn = sqlite3.connect(db_path)
+            # Allow same connection object across threads – LiveProcessor spawns worker threads.
+            conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row  # Enable dict-like access
             
             # Create tables if they don't exist

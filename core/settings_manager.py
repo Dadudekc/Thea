@@ -24,7 +24,9 @@ class SettingsManager:
             "auto_save": True,
             "auto_refresh": True,
             "refresh_interval": 300,
-            "font_size": 12
+            "font_size": 12,
+            # Prefer API by default but allow users to switch to 'scraper'
+            "prompt_send_method": "api",
         }
         
         if self.settings_file.exists():

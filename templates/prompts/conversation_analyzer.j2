@@ -1,18 +1,152 @@
-You are an AI conversation analyst for Dream.OS. Analyze the following conversation and provide:
+{# EDIT START - enhanced v3 #}
+{#
+Variables expected:
+  conversation_content : str  – The conversation to analyze.
+  analysis_type       : str  – (optional) Type of analysis (e.g., "Technical", "Project", "General").
+  participants        : str  – (optional) Number or names of participants.
+  conversation_length : str  – (optional) Duration or message count.
+#}
 
-## Analysis Output:
-1. **Main Topic**: Primary subject or theme
-2. **Key Insights**: Most important points or discoveries
-3. **Action Items**: Tasks, decisions, or next steps identified
-4. **Technical Content**: Code, configurations, or technical details
-5. **Project Context**: What project or system this relates to
+You are an expert conversation analyst for Dream.OS. Analyze the following conversation and provide comprehensive insights.
 
-## Summary Format:
-- **Title**: Concise, descriptive title
-- **Summary**: 2-3 paragraph summary
-- **Tags**: 3-5 relevant tags for categorization
-- **Key Points**: Bullet points of important takeaways
-- **Next Steps**: Actionable items or follow-ups
+## 🗣️ **Conversation Analysis**
 
-**CONVERSATION TO ANALYZE:**
-{{ conversation_content }} 
+### **Analysis Context**
+{% if analysis_type %}
+**Analysis Type:** {{ analysis_type }}
+{% endif %}
+{% if participants %}
+**Participants:** {{ participants }}
+{% endif %}
+{% if conversation_length %}
+**Conversation Length:** {{ conversation_length }}
+{% endif %}
+
+### **Conversation to Analyze:**
+{{ conversation_content }}
+
+---
+
+## 📊 **Analysis Summary**
+
+### **Quick Overview**
+- **Main Topic:** *Primary subject or theme*
+- **Conversation Type:** *Technical discussion, planning, problem-solving, etc.*
+- **Sentiment:** *Overall tone (Positive, Neutral, Negative, Mixed)*
+- **Engagement Level:** *High, Medium, Low*
+
+### **Key Insights**
+- **Primary Focus:** *Main area of discussion*
+- **Decision Points:** *Key decisions made or needed*
+- **Action Items:** *Tasks identified or assigned*
+
+---
+
+## 🔍 **Detailed Analysis**
+
+### **1. Content Analysis** 📝
+
+#### **Main Topics Identified**
+- *Primary subject areas discussed*
+- *Subtopics and related themes*
+
+#### **Technical Content**
+- **Code Snippets:** *Programming code discussed*
+- **Tools Mentioned:** *Software, libraries, frameworks*
+- **Technical Decisions:** *Architecture, design choices*
+
+#### **Project Context**
+- **Project Scope:** *What project this relates to*
+- **Current Phase:** *Development stage discussed*
+- **Stakeholders:** *People or teams involved*
+
+### **2. Communication Analysis** 💬
+
+#### **Conversation Flow**
+- **Structure:** *How the conversation progressed*
+- **Pacing:** *Speed and rhythm of discussion*
+- **Clarity:** *How well ideas were communicated*
+
+#### **Participant Dynamics**
+- **Roles:** *Who took what role in the conversation*
+- **Contributions:** *Key contributions from each participant*
+- **Collaboration:** *How well people worked together*
+
+### **3. Action Items & Decisions** ✅
+
+#### **Action Items Identified**
+- **Immediate:** *Tasks to be done right away*
+- **Short-term:** *Tasks for the next few days*
+- **Long-term:** *Tasks for future consideration*
+
+#### **Decisions Made**
+- **Technical Decisions:** *Code, architecture, tool choices*
+- **Process Decisions:** *Workflow, methodology choices*
+- **Strategic Decisions:** *Direction, priority choices*
+
+### **4. Sentiment & Tone** 😊
+
+#### **Overall Sentiment**
+- **Positive Aspects:** *What went well*
+- **Concerns:** *Issues or worries expressed*
+- **Frustrations:** *Pain points or challenges*
+
+#### **Communication Style**
+- **Formal vs. Informal:** *Tone of communication*
+- **Technical Depth:** *Level of technical detail*
+- **Clarity:** *How clear the communication was*
+
+---
+
+## 🎯 **Key Takeaways**
+
+### **Most Important Points**
+1. *Key insight or finding*
+2. *Critical decision or action*
+3. *Significant challenge or opportunity*
+
+### **Next Steps**
+1. **Immediate Actions:** *What needs to happen next*
+2. **Follow-up Items:** *What to track or monitor*
+3. **Future Considerations:** *What to keep in mind*
+
+---
+
+## 🏷️ **Categorization**
+
+### **Primary Tags**
+- *Technical, Planning, Problem-solving, Review, etc.*
+
+### **Secondary Tags**
+- *python, api, testing, documentation, etc.*
+
+### **Sentiment Tags**
+- *positive, collaborative, challenging, productive, etc.*
+
+---
+
+## 📋 **Summary Report**
+
+### **Title:** *Concise, descriptive title*
+
+### **Executive Summary** (2-3 sentences)
+*High-level overview of the conversation and its significance*
+
+### **Detailed Summary** (2-3 paragraphs)
+*Comprehensive description of what was discussed, decided, and accomplished*
+
+### **Key Points**
+- *Important takeaway 1*
+- *Important takeaway 2*
+- *Important takeaway 3*
+
+### **Action Items**
+- [ ] *Action item 1*
+- [ ] *Action item 2*
+- [ ] *Action item 3*
+
+---
+
+*Analysis completed by Dream.OS Conversation Analyzer - Insights extracted!*
+
+{# EDIT END #}

@@ -211,20 +211,22 @@ class LiveProcessor:
     async def _process_single_conversation(self, conversation: Dict):
         """Process a single conversation."""
         try:
-            # Store in memory
-            conversation_id = self.memory_manager.store_conversation(conversation)
-            
-            # Process through dreamscape
-            result = self.dreamscape_processor.process_single_conversation(conversation_id)
-            
-            if result.get('success'):
-                logger.debug(f"Processed conversation: {conversation.get('title', 'Untitled')}")
-                
-                # Update MMORPG state
-                self.mmorpg_engine.update_from_conversation(conversation_id)
-                
+            # Store in memory first; keep track of success flag
+            stored_ok = self.memory_manager.store_conversation(conversation)
+            if not stored_ok:
+                logger.error("Failed to store conversation: %s", conversation.get("id"))
+                return
+
+            # Run Dreamscape processing on the freshly stored conversation dict
+            result = self.dreamscape_processor.process_single_conversation(conversation)
+
+            if result.get("success", False):
+                logger.debug("Processed conversation: %s", conversation.get("title", "Untitled"))
+
+                # Update MMORPG state (uses conversation ID)
+                self.mmorpg_engine.update_from_conversation(conversation.get("id"))
             else:
-                logger.error(f"Failed to process conversation: {result.get('error')}")
+                logger.error("Failed to process conversation: %s", result.get("error"))
                 
         except Exception as e:
             logger.error(f"Error processing conversation: {e}")

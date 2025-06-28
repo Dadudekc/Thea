@@ -6,7 +6,7 @@ Manages prompt templates and template operations.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QListWidget, QListWidgetItem, QTextEdit, QLineEdit,
-    QSplitter, QMessageBox, QInputDialog, QFileDialog
+    QSplitter, QMessageBox, QInputDialog, QFileDialog, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -90,6 +90,7 @@ class TemplatesPanel(QWidget):
         
         # Template list
         self.template_list = QListWidget()
+        self.template_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.template_list.itemSelectionChanged.connect(self.on_template_selected)
         list_layout.addWidget(self.template_list)
         
@@ -105,6 +106,11 @@ class TemplatesPanel(QWidget):
         self.duplicate_btn.clicked.connect(self.duplicate_template)
         self.duplicate_btn.setEnabled(False)
         button_layout.addWidget(self.duplicate_btn)
+
+        self.send_btn = QPushButton("📤 Send Prompt(s)")
+        self.send_btn.clicked.connect(self._emit_send_selected)
+        self.send_btn.setEnabled(False)
+        button_layout.addWidget(self.send_btn)
         
         list_layout.addLayout(button_layout)
         
@@ -168,12 +174,15 @@ class TemplatesPanel(QWidget):
     
     def on_template_selected(self):
         """Handle template selection."""
-        current_item = self.template_list.currentItem()
-        if current_item:
-            template = current_item.data(Qt.ItemDataRole.UserRole)
-            self.edit_template(template)
-        else:
+        selected_items = self.template_list.selectedItems()
+        if not selected_items:
             self.clear_editor()
+            self.send_btn.setEnabled(False)
+            return
+        # single-select editing uses first item
+        template = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        self.edit_template(template)
+        self.send_btn.setEnabled(True)
     
     def edit_template(self, template: Dict):
         """Edit a template in the editor."""
@@ -366,4 +375,10 @@ class TemplatesPanel(QWidget):
     
     def get_current_template(self) -> Dict:
         """Get the currently selected template."""
-        return self.current_template or {} 
+        return self.current_template or {}
+
+    def _emit_send_selected(self):
+        """Emit signal with selected templates for sending as prompts."""
+        sels = [it.data(Qt.ItemDataRole.UserRole) for it in self.template_list.selectedItems()]
+        if sels:
+            self.template_selected.emit({"action":"send","templates":sels}) 

@@ -1,1 +1,36 @@
-{{ player_name }} acquired **{{ item_name }}** ({{ rarity }}) 🛡️ 
+{# EDIT START - enhanced v3 #}
+{#
+Variables expected:
+  player_name : str        – Name of the player.
+  item_name   : str        – Name of the equipment gained.
+  rarity      : str        – Rarity tier (Common, Uncommon, Rare, Epic, Legendary).
+  item_type   : str        – (optional) Slot or class – e.g., "Sword", "Armor".
+  description : str        – (optional) Flavor description of the item.
+  timestamp   : str        – (optional) ISO8601 or formatted acquisition time.
+#}
+
+{% set rarity_data = {
+  'Common':     {'emoji': '⚪', 'flavor': 'Everyday gear'},
+  'Uncommon':   {'emoji': '🟢', 'flavor': 'A notch above the ordinary'},
+  'Rare':       {'emoji': '🔵', 'flavor': 'Standout relic'},
+  'Epic':       {'emoji': '🟣', 'flavor': 'Legend in the making'},
+  'Legendary':  {'emoji': '🟡', 'flavor': 'Mythic masterpiece'}
+} %}
+{% set data = rarity_data.get(rarity, {'emoji':'🔸','flavor':'Unknown treasure'}) %}
+{% set emoji = data.emoji %}
+{% set flavor = data.flavor %}
+
+> ### 🎉 Loot Acquired! {{ emoji }}  
+> **{{ player_name }}** has obtained a **{{ rarity|upper }}** item:
+> 
+> - **Name:** {{ item_name|title }}
+> - **Type:** {{ (item_type|title) if item_type else 'Equipment' }}
+> - **Rarity Flavor:** *{{ flavor }}*
+> {% if description %}
+> - **Description:** {{ description }}
+> {% endif %}
+> {% if timestamp %}
+> - **Acquired At:** {{ timestamp }}
+> {% endif %}
+
+{# EDIT END #}

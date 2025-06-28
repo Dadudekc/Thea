@@ -1,27 +1,120 @@
-You are an action planner for Dream.OS. Analyze the following conversation or work session and create a structured action plan:
+{# EDIT START - enhanced action_plan v4 #}
+{#
+Variables expected:
+  planning_content : str           – Raw conversation or work-session text.
+  project_name     : str           – (optional) Name of the project being planned.
+  timeframe        : str           – (optional) Planning timeframe.
+  complexity       : str           – (optional) Project complexity.
+  author           : str           – (optional) Name of the planner.
+  timestamp        : str           – (optional) ISO8601 or formatted generation time.
+  action_plan      : dict with keys:
+    immediate   : list of task dicts
+    short_term  : list of task dicts
+    medium_term : list of task dicts
+    long_term   : list of strings or task dicts
+  where each task dict contains:
+    title, category, priority, timeline, success, risks,
+    mitigation, dependencies, resources, owner, status
+#}
 
-## Action Plan Components:
-1. **Immediate Actions**: Tasks that need to be done today/this week
-2. **Short-term Goals**: Objectives for the next 1-2 weeks
-3. **Medium-term Projects**: Larger initiatives for the next month
-4. **Long-term Vision**: Strategic goals and direction
-5. **Dependencies**: What needs to happen before other tasks
-6. **Resources Needed**: Tools, skills, or support required
+{% macro count_by_priority(section) -%}
+  {{ section | selectattr('priority','equalto','High')   | list | length }},
+  {{ section | selectattr('priority','equalto','Medium') | list | length }},
+  {{ section | selectattr('priority','equalto','Low')    | list | length }}
+{%- endmacro %}
 
-## Output Format:
-- **Priority Matrix**: High/Medium/Low priority tasks
-- **Timeline**: When each action should be completed
-- **Success Criteria**: How to measure completion
-- **Risk Mitigation**: Potential obstacles and solutions
-- **Resource Allocation**: What resources are needed
-- **Follow-up Actions**: How to track progress
+{% macro render_tasks(section) -%}
+{% for t in section %}
+- **{{ t.title }}** ({{ t.category }}) — Priority: {{ t.priority }}
+  - **Timeline:** {{ t.timeline }}
+  - **Owner:** {{ t.owner }}
+  - **Status:** {{ t.status }}
+  - **Success Criteria:** {{ t.success }}
+  - **Risks:** {{ t.risks }} → Mitigation: {{ t.mitigation }}
+  - **Dependencies:** {{ t.dependencies | default('None') }}
+  - **Resources:** {{ t.resources | default('N/A') }}
+{% endfor %}
+{%- endmacro %}
 
-## Task Categories:
-- **Development**: Coding, testing, deployment
-- **Research**: Learning, exploration, analysis
-- **Documentation**: Writing, organizing, sharing
-- **Infrastructure**: Setup, configuration, maintenance
-- **Planning**: Strategy, architecture, design
+{% set high_counts = [
+    action_plan.immediate   | selectattr('priority','equalto','High')   | list | length,
+    action_plan.short_term  | selectattr('priority','equalto','High')   | list | length,
+    action_plan.medium_term | selectattr('priority','equalto','High')   | list | length
+] | sum %}
+{% set med_counts = [
+    action_plan.immediate   | selectattr('priority','equalto','Medium') | list | length,
+    action_plan.short_term  | selectattr('priority','equalto','Medium') | list | length,
+    action_plan.medium_term | selectattr('priority','equalto','Medium') | list | length
+] | sum %}
+{% set low_counts = [
+    action_plan.immediate   | selectattr('priority','equalto','Low')    | list | length,
+    action_plan.short_term  | selectattr('priority','equalto','Low')    | list | length,
+    action_plan.medium_term | selectattr('priority','equalto','Low')    | list | length
+] | sum %}
 
-**CONTENT TO PLAN FROM:**
-{{ planning_content }} 
+> ## 🚀 {{ project_name | default("Dream.OS Action Plan") }}
+
+{% if timeframe %}> **Timeframe:** {{ timeframe }}{% endif %}
+{% if complexity %}> **Complexity:** {{ complexity }}{% endif %}
+{% if author %}> **Planner:** {{ author }}{% endif %}
+{% if timestamp %}> **Generated:** {{ timestamp }}{% endif %}
+
+---
+
+## 📋 Priority Matrix
+
+| Priority | Count |
+|----------|------:|
+| 🔴 High   | {{ high_counts }} |
+| 🟡 Medium | {{ med_counts }} |
+| 🟢 Low    | {{ low_counts }} |
+
+---
+
+## 🎯 Structured Action Plan
+
+### 1. Immediate Actions (This Week)
+{{ render_tasks(action_plan.immediate) }}
+
+### 2. Short-term Goals (Next 1–2 Weeks)
+{{ render_tasks(action_plan.short_term) }}
+
+### 3. Medium-term Projects (Next Month)
+{{ render_tasks(action_plan.medium_term) }}
+
+### 4. Long-term Vision
+{% for item in action_plan.long_term %}
+- {{ item }}
+{% endfor %}
+
+---
+
+## 🧰 Resource Requirements
+{% set all_tasks = action_plan.immediate + action_plan.short_term + action_plan.medium_term %}
+- **Skills Needed:** {{ all_tasks | map(attribute='category') | unique | join(', ') }}
+- **Tools & Dependencies:** {{ all_tasks | map(attribute='resources') | unique | join(', ') }}
+- **Team Support:** {{ all_tasks | map(attribute='owner') | unique | join(', ') }}
+
+---
+
+## ⚠️ Risk Assessment
+{% for t in all_tasks %}
+- **{{ t.title }}:** {{ t.risks }} → Mitigation: {{ t.mitigation }}
+{% endfor %}
+
+---
+
+## ✅ Success Metrics
+{% for t in all_tasks %}
+- **{{ t.title }}:** {{ t.success }}
+{% endfor %}
+
+---
+
+<details>
+<summary>📄 Raw Planning Content</summary>
+
+{{ planning_content }}
+
+</details>
+{# EDIT END #}
