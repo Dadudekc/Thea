@@ -8,8 +8,11 @@ import os
 import sys
 import time
 import json
+import signal
+import atexit
 from pathlib import Path
 from datetime import datetime
+import argparse
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,6 +24,26 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
+
+# Global variable to hold the orchestrator for cleanup
+_global_orchestrator = None
+
+def cleanup_handler(signum=None, frame=None):
+    """Cleanup handler to properly close browser."""
+    global _global_orchestrator
+    if _global_orchestrator:
+        try:
+            _global_orchestrator.close()
+            print("✅ Browser closed during cleanup")
+        except Exception as e:
+            print(f"⚠️  Error during cleanup: {e}")
+
+# Register cleanup handlers
+atexit.register(cleanup_handler)
+if hasattr(signal, 'SIGINT'):
+    signal.signal(signal.SIGINT, cleanup_handler)
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, cleanup_handler)
 
 class TemplateResponder:
     """Handles sending templates to ChatGPT and collecting responses."""
@@ -75,13 +98,29 @@ class TemplateResponder:
             textarea.clear()
             time.sleep(1)
             
-            # Use paste method instead of send_keys
-            driver.execute_script("arguments[0].value = arguments[1];", textarea, prompt)
-            time.sleep(1)
+            # Handle different input types
+            tag_name = textarea.tag_name.lower()
             
-            # Trigger input event to make sure the textarea recognizes the change
-            driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", textarea)
-            time.sleep(1)
+            if tag_name == 'textarea' or tag_name == 'input':
+                # Use paste method for traditional inputs
+                driver.execute_script("arguments[0].value = arguments[1];", textarea, prompt)
+                time.sleep(1)
+                
+                # Trigger input event to make sure the textarea recognizes the change
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", textarea)
+                time.sleep(1)
+            elif tag_name == 'div' or tag_name == 'p':
+                # Handle contenteditable elements
+                driver.execute_script("arguments[0].innerHTML = arguments[1];", textarea, prompt)
+                time.sleep(1)
+                
+                # Trigger input event
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", textarea)
+                time.sleep(1)
+            else:
+                # Fallback: try to send keys directly
+                textarea.send_keys(prompt)
+                time.sleep(1)
             
             print("✅ Pasted prompt into textarea")
             return True
@@ -146,30 +185,72 @@ class TemplateResponder:
         
         return None
     
+    def check_login_status(self, driver) -> bool:
+        """Check if user is logged in using profile image detection."""
+        try:
+            # Primary indicator: Profile image (most reliable)
+            profile_image_selectors = [
+                "img[alt='Profile image']",
+                "img[src*='gravatar.com']",
+                "img[src*='auth0.com']",
+                "[data-testid='user-avatar']",
+                ".user-avatar img",
+                "img[class*='avatar']"
+            ]
+            
+            for selector in profile_image_selectors:
+                try:
+                    elements = driver.find_elements("css selector", selector)
+                    if elements and len(elements) > 0:
+                        # Check if any of the elements are visible
+                        visible_elements = [elem for elem in elements if elem.is_displayed()]
+                        if visible_elements:
+                            print(f"✅ Logged in detected via profile image: {selector}")
+                            return True
+                except Exception:
+                    continue
+            
+            # Secondary indicators (fallback)
+            logged_in_indicators = [
+                "//a[contains(@href, '/c/')]",  # Conversation links
+                "//button[contains(@aria-label, 'New chat')]",  # New chat button
+                "//button[contains(text(), 'New chat')]",  # New chat button (text)
+            ]
+            
+            for indicator in logged_in_indicators:
+                try:
+                    elements = driver.find_elements("xpath", indicator)
+                    if elements and len(elements) > 0:
+                        # Check if any of the elements are visible
+                        visible_elements = [elem for elem in elements if elem.is_displayed()]
+                        if visible_elements:
+                            print(f"✅ Logged in detected via: {indicator}")
+                            return True
+                except Exception:
+                    continue
+            
+            print("❌ Not logged in - no profile image or conversation elements found")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error checking login status: {e}")
+            return False
+
     def test_templates(self):
         """Test all templates and collect responses."""
+        global _global_orchestrator
+        
         print("🚀 Starting template response collection...")
         
-        with ScraperOrchestrator(headless=False, use_undetected=False) as orch:
+        orch = ScraperOrchestrator(headless=False, use_undetected=False)
+        _global_orchestrator = orch  # Set global for cleanup
+        
+        try:
             print("🔧 Initializing browser...")
             init_result = orch.initialize_browser()
             if not init_result.success:
                 print("❌ Browser initialization failed")
                 return
-            
-            print("🔐 Attempting login...")
-            login_result = orch.login_and_save_cookies(
-                username=self.username,
-                password=self.password,
-                allow_manual=True,
-                manual_timeout=120,
-            )
-            
-            if not login_result.success:
-                print("❌ Login failed")
-                return
-            
-            print("✅ Login successful")
             
             # Navigate to ChatGPT
             print("🌐 Navigating to ChatGPT...")
@@ -178,16 +259,72 @@ class TemplateResponder:
             
             print(f"Current URL: {orch.driver.current_url}")
             
+            # Check login status using profile image
+            print("🔍 Checking login status...")
+            if not self.check_login_status(orch.driver):
+                print("❌ Not logged in - please log in manually")
+                print("⏳ Waiting for manual login...")
+                input("Press Enter when you are logged in...")
+                
+                # Check again after manual login
+                if not self.check_login_status(orch.driver):
+                    print("❌ Still not logged in after manual login")
+                    return
+                else:
+                    print("✅ Manual login successful!")
+            else:
+                print("✅ Already logged in!")
+            
             # Wait for chat interface
             print("⏳ Waiting for chat interface...")
             wait = WebDriverWait(orch.driver, 30)
             
             try:
-                textarea = wait.until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "textarea"))
-                )
-                placeholder = textarea.get_attribute('placeholder') or 'No placeholder'
-                print(f"✅ Found textarea with placeholder: '{placeholder}'")
+                # Try modern ChatGPT textarea selectors first
+                textarea_selectors = [
+                    "textarea[data-id='root']",
+                    "textarea[placeholder*='Message']",
+                    "textarea[placeholder*='chat']",
+                    "textarea[placeholder*='Send']",
+                    "textarea",
+                    "[data-id='root']",
+                    "[contenteditable='true']",
+                    "div[contenteditable='true']",
+                    "p[data-placeholder]"
+                ]
+                
+                textarea = None
+                for selector in textarea_selectors:
+                    try:
+                        textarea = wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if textarea and textarea.is_displayed() and textarea.is_enabled():
+                            placeholder = textarea.get_attribute('placeholder') or 'No placeholder'
+                            print(f"✅ Found textarea with selector: {selector}, placeholder: '{placeholder}'")
+                            break
+                    except TimeoutException:
+                        continue
+                
+                if not textarea:
+                    print("❌ Textarea not found with any selector")
+                    # Try to find any input-like element
+                    try:
+                        all_inputs = orch.driver.find_elements("css selector", "input, textarea, [contenteditable='true']")
+                        for inp in all_inputs:
+                            if inp.is_displayed() and inp.is_enabled():
+                                tag_name = inp.tag_name
+                                placeholder = inp.get_attribute('placeholder') or 'No placeholder'
+                                print(f"Found potential input: {tag_name}, placeholder: '{placeholder}'")
+                                if any(keyword in placeholder.lower() for keyword in ['message', 'chat', 'send', 'type']):
+                                    textarea = inp
+                                    print(f"✅ Using fallback input: {tag_name}")
+                                    break
+                    except Exception as e:
+                        print(f"❌ Error during fallback input search: {e}")
+                    
+                    if not textarea:
+                        return
                 
             except TimeoutException:
                 print("❌ Textarea not found")
@@ -298,11 +435,154 @@ class TemplateResponder:
                     continue
             
             print("\n🏁 Template testing completed!")
+            
+        finally:
+            # Cleanup
+            try:
+                orch.close()
+                _global_orchestrator = None
+                print("✅ Browser closed successfully")
+            except Exception as e:
+                print(f"⚠️  Error during browser cleanup: {e}")
+
+    def test_templates_quick(self):
+        """Quick test with just one template."""
+        global _global_orchestrator
+        
+        print("🚀 Starting quick template test...")
+        
+        orch = ScraperOrchestrator(headless=False, use_undetected=False)
+        _global_orchestrator = orch  # Set global for cleanup
+        
+        try:
+            print("🔧 Initializing browser...")
+            init_result = orch.initialize_browser()
+            if not init_result.success:
+                print("❌ Browser initialization failed")
+                return
+            
+            # Navigate to ChatGPT
+            print("🌐 Navigating to ChatGPT...")
+            orch.driver.get("https://chat.openai.com")
+            time.sleep(5)
+            
+            print(f"Current URL: {orch.driver.current_url}")
+            
+            # Check login status using profile image
+            print("🔍 Checking login status...")
+            if not self.check_login_status(orch.driver):
+                print("❌ Not logged in - please log in manually")
+                print("⏳ Waiting for manual login...")
+                input("Press Enter when you are logged in...")
+                
+                # Check again after manual login
+                if not self.check_login_status(orch.driver):
+                    print("❌ Still not logged in after manual login")
+                    return
+                else:
+                    print("✅ Manual login successful!")
+            else:
+                print("✅ Already logged in!")
+            
+            # Wait for chat interface
+            print("⏳ Waiting for chat interface...")
+            wait = WebDriverWait(orch.driver, 30)
+            
+            try:
+                # Try modern ChatGPT textarea selectors first
+                textarea_selectors = [
+                    "textarea[data-id='root']",
+                    "textarea[placeholder*='Message']",
+                    "textarea[placeholder*='chat']",
+                    "textarea[placeholder*='Send']",
+                    "textarea",
+                    "[data-id='root']",
+                    "[contenteditable='true']",
+                    "div[contenteditable='true']",
+                    "p[data-placeholder]"
+                ]
+                
+                textarea = None
+                for selector in textarea_selectors:
+                    try:
+                        textarea = wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if textarea and textarea.is_displayed() and textarea.is_enabled():
+                            placeholder = textarea.get_attribute('placeholder') or 'No placeholder'
+                            print(f"✅ Found textarea with selector: {selector}, placeholder: '{placeholder}'")
+                            break
+                    except TimeoutException:
+                        continue
+                
+                if not textarea:
+                    print("❌ Textarea not found with any selector")
+                    return
+                
+            except TimeoutException:
+                print("❌ Textarea not found")
+                return
+            
+            # Test with just one simple template
+            print("\n📋 Testing simple template...")
+            
+            # Simple test template
+            test_template = "Hello! This is a test message from the template system. Please respond with a simple greeting."
+            
+            print(f"📤 Sending test prompt ({len(test_template)} characters)...")
+            
+            # Send prompt using paste method
+            if not self.send_prompt_with_paste(orch.driver, textarea, test_template):
+                print("❌ Failed to paste prompt")
+                return
+            
+            # Find and click send button
+            send_button = self.find_send_button(orch.driver, wait)
+            if not send_button:
+                print("❌ Send button not found")
+                return
+            
+            send_button.click()
+            print("✅ Clicked send button")
+            
+            # Wait for response
+            print("⏳ Waiting for response...")
+            time.sleep(20)
+            
+            # Get response
+            response = self.get_response(orch.driver, wait)
+            if response:
+                print(f"📄 Response received ({len(response)} characters)")
+                print(f"Response preview: {response[:200]}...")
+                
+                # Save test response
+                self.save_response("test", "quick_test", test_template, response, orch.driver.current_url)
+                print("✅ Quick test completed successfully!")
+            else:
+                print("❌ No response received")
+            
+        finally:
+            # Cleanup
+            try:
+                orch.close()
+                _global_orchestrator = None
+                print("✅ Browser closed successfully")
+            except Exception as e:
+                print(f"⚠️  Error during browser cleanup: {e}")
 
 def main():
     """Main function."""
+    parser = argparse.ArgumentParser(description="Test template responses")
+    parser.add_argument("--test", action="store_true", help="Run a quick test with one template only")
+    args = parser.parse_args()
+    
     responder = TemplateResponder()
-    responder.test_templates()
+    
+    if args.test:
+        print("🧪 Running quick test mode...")
+        responder.test_templates_quick()
+    else:
+        responder.test_templates()
 
 if __name__ == "__main__":
     main() 

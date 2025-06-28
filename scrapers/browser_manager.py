@@ -204,24 +204,15 @@ class BrowserManager:
             # Install or reuse the driver for the chosen version.
             if chosen_version:
                 # ------------------------------------------------------------------
-                # undetected-chromedriver caches binaries by major version.  If a newer
-                # driver is already cached we must force-install and pass explicit path.
+                # undetected-chromedriver handles version management internally.
+                # We just need to pass the version_main parameter.
                 # ------------------------------------------------------------------
-                try:
-                    logger.info("Installing Chrome driver version_main=%s", chosen_version)
-                    driver_bin = uc.install(version_main=chosen_version)
-                    logger.info("Driver binary installed at %s", driver_bin)
-                except Exception as install_err:
-                    logger.warning("Failed to install specified driver version: %s – falling back to default", install_err)
-                    driver_bin = None
-
+                logger.info("Creating uc.Chrome with version_main=%s", chosen_version)
                 chrome_kwargs = {
                     "options": options,
                     "version_main": chosen_version,
                     "patcher_force_close": True,
                 }
-                if driver_bin:
-                    chrome_kwargs["driver_executable_path"] = driver_bin
 
                 driver = uc.Chrome(**chrome_kwargs)
             else:

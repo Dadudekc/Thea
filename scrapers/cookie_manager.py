@@ -103,11 +103,22 @@ class CookieManager:
                     cookie["domain"] = cookie["domain"].lstrip(".")
 
             if patched:
-                logger.debug("Rewrote domain for %s cookie(s) → %s", patched, current_host)
+                logger.debug("Rewritten domain for %s cookie(s) → %s", patched, current_host)
 
             # Add cookies to driver
             for cookie in cookies:
                 try:
+                    # Skip problematic cookies that cause errors
+                    cookie_name = cookie.get('name', '')
+                    if cookie_name in ['__Host-next-auth.csrf-token', '__Host-next-auth.callback-url']:
+                        logger.debug(f"Skipping problematic cookie: {cookie_name}")
+                        continue
+                    
+                    # Additional validation for cookie properties
+                    if not cookie.get('name') or not cookie.get('value'):
+                        logger.debug(f"Skipping invalid cookie: missing name or value")
+                        continue
+                    
                     driver.add_cookie(cookie)
                 except Exception as e:
                     logger.warning(f"Failed to add cookie {cookie.get('name', 'unknown')}: {e}")

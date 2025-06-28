@@ -120,4 +120,4 @@ if __name__ == "__main__":
         env_login=args.env_login,
         wait_secs=args.wait_secs,
     )
-    sys.exit(0 if success else 1) 
+    sys.exit(0 if success else 1)

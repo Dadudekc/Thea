@@ -103,6 +103,13 @@ class LoginHandler:
                 "//input[@name='email']",
                 "//input[@type='email']",
                 "//input[contains(translate(@placeholder,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'email')]",
+                "//input[contains(translate(@placeholder,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'username')]",
+                "//input[contains(translate(@placeholder,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'user')]",
+                "//input[@data-testid='email-input']",
+                "//input[@data-testid='username-input']",
+                "//input[contains(@class, 'email')]",
+                "//input[contains(@class, 'username')]",
+                "//input[contains(@class, 'user')]",
             ]
             username_field = None
             for sel in username_selectors:
@@ -110,14 +117,37 @@ class LoginHandler:
                     username_field = wait.until(
                         EC.presence_of_element_located((By.XPATH, sel))
                     )
-                    if username_field:
+                    if username_field and username_field.is_displayed() and username_field.is_enabled():
+                        logger.info(f"Found username field with selector: {sel}")
                         break
                 except TimeoutException:
                     continue
 
             if not username_field:
                 logger.error("Username/email field not found via any selector")
-                return False
+                # Try to find any input field that might be for email/username
+                try:
+                    all_inputs = driver.find_elements("tag name", "input")
+                    for inp in all_inputs:
+                        if inp.is_displayed() and inp.is_enabled():
+                            inp_type = inp.get_attribute("type") or ""
+                            inp_name = inp.get_attribute("name") or ""
+                            inp_id = inp.get_attribute("id") or ""
+                            inp_placeholder = inp.get_attribute("placeholder") or ""
+                            
+                            # Check if this looks like an email/username field
+                            if (inp_type.lower() in ['email', 'text'] or 
+                                'email' in inp_name.lower() or 'user' in inp_name.lower() or
+                                'email' in inp_id.lower() or 'user' in inp_id.lower() or
+                                'email' in inp_placeholder.lower() or 'user' in inp_placeholder.lower()):
+                                username_field = inp
+                                logger.info(f"Found username field by inspection: type={inp_type}, name={inp_name}, id={inp_id}, placeholder={inp_placeholder}")
+                                break
+                except Exception as e:
+                    logger.error(f"Error during fallback username field search: {e}")
+                
+                if not username_field:
+                    return False
 
             username_field.clear()
             username_field.send_keys(self.username)
@@ -260,12 +290,35 @@ class LoginHandler:
             True if logged in, False otherwise
         """
         if not driver:
+            logger.error("No driver provided")
             return False
         
         try:
-            # Check for common logged-in indicators (more specific)
+            # Primary indicator: Profile image (most reliable)
+            profile_image_selectors = [
+                "img[alt='Profile image']",
+                "img[src*='gravatar.com']",
+                "img[src*='auth0.com']",
+                "[data-testid='user-avatar']",
+                ".user-avatar img",
+                "img[class*='avatar']"
+            ]
+            
+            for selector in profile_image_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and len(elements) > 0:
+                        # Check if any of the elements are visible
+                        visible_elements = [elem for elem in elements if elem.is_displayed()]
+                        if visible_elements:
+                            logger.info(f"Logged in detected via profile image: {selector}")
+                            return True
+                except Exception:
+                    continue
+            
+            # Secondary indicators (fallback)
             logged_in_indicators = [
-                "//a[contains(@href, '/c/')]",  # Conversation links (most reliable)
+                "//a[contains(@href, '/c/')]",  # Conversation links
                 "//button[contains(@aria-label, 'New chat')]",  # New chat button
                 "//button[contains(text(), 'New chat')]",  # New chat button (text)
                 "//div[contains(@class, 'conversation')]//a",  # Conversation items
@@ -302,21 +355,8 @@ class LoginHandler:
             except NoSuchElementException:
                 pass
             
-            try:
-                signup_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Sign up')]")
-                if signup_button.is_displayed():
-                    logger.info("Sign up button found - not logged in")
-                    return False
-            except NoSuchElementException:
-                pass
-            
-            # Check current URL - if we're on chatgpt.com but not chat.openai.com, we might not be logged in
-            current_url = driver.current_url
-            if "chatgpt.com" in current_url and "chat.openai.com" not in current_url:
-                logger.info("On chatgpt.com but not chat.openai.com - likely not logged in")
-                return False
-            
-            logger.info("Login status unclear - no clear indicators found")
+            # If we can't determine, assume not logged in
+            logger.debug("Could not determine login status - assuming not logged in")
             return False
             
         except Exception as e:
